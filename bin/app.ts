@@ -193,6 +193,22 @@ export class RoutingAPIPipeline extends Stack {
       'INFURA_8453',
       'ALCHEMY_8453',
       'NIRVANA_8453',
+      // Sepolia
+      'INFURA_11155111',
+      'ALCHEMY_11155111',
+      // Arbitrum
+      'INFURA_42161',
+      'QUICKNODE_42161',
+      'NIRVANA_42161',
+      'ALCHEMY_42161',
+      // Ethereum
+      'INFURA_1',
+      'QUICKNODE_1',
+      'NIRVANA_1',
+      'ALCHEMY_1',
+      // Blast
+      'QUICKNODE_81457',
+      'INFURA_81457',
     ]
     for (const provider of RPC_GATEWAY_PROVIDERS) {
       jsonRpcProviders[provider] = jsonRpcProvidersSecret.secretValueFromJson(provider).toString()
@@ -334,6 +350,22 @@ const jsonRpcProviders = {
   INFURA_8453: process.env.INFURA_8453!,
   ALCHEMY_8453: process.env.ALCHEMY_8453!,
   NIRVANA_8453: process.env.NIRVANA_8453!,
+  // Sepolia
+  INFURA_11155111: process.env.INFURA_11155111!,
+  ALCHEMY_11155111: process.env.ALCHEMY_11155111!,
+  // Arbitrum
+  INFURA_42161: process.env.INFURA_42161!,
+  QUICKNODE_42161: process.env.QUICKNODE_42161!,
+  NIRVANA_42161: process.env.NIRVANA_42161!,
+  ALCHEMY_42161: process.env.ALCHEMY_42161!,
+  // Ethereum
+  INFURA_1: process.env.INFURA_1!,
+  QUICKNODE_1: process.env.QUICKNODE_1!,
+  NIRVANA_1: process.env.NIRVANA_1!,
+  ALCHEMY_1: process.env.ALCHEMY_1!,
+  // Blast
+  QUICKNODE_81457: process.env.QUICKNODE_81457!,
+  INFURA_81457: process.env.INFURA_81457!,
 }
 
 // Local dev stack

@@ -10,6 +10,7 @@ import {
 } from '../../../../lib/rpc/config'
 import { SingleJsonRpcProvider } from '../../../../lib/rpc/SingleJsonRpcProvider'
 import { default as bunyan } from 'bunyan'
+import { ProviderHealthiness } from '../../../../lib/rpc/ProviderHealthState'
 
 const UNI_PROVIDER_TEST_CONFIG: UniJsonRpcProviderConfig = {
   HEALTH_EVALUATION_WAIT_PERIOD_IN_S: 0,
@@ -27,7 +28,6 @@ const SINGLE_PROVIDER_TEST_CONFIG: SingleJsonRpcProviderConfig = {
   MAX_LATENCY_ALLOWED_IN_MS: 500,
   RECOVER_SCORE_PER_MS: 0.005,
   RECOVER_MAX_WAIT_TIME_TO_ACKNOWLEDGE_IN_MS: 20000,
-  ENABLE_DB_SYNC: false,
   DB_SYNC_INTERVAL_IN_S: 5,
   LATENCY_STAT_HISTORY_WINDOW_LENGTH_IN_S: 300,
   LATENCY_EVALUATION_WAIT_PERIOD_IN_S: 15,
@@ -40,19 +40,36 @@ const log = bunyan.createLogger({
 })
 
 const createNewSingleJsonRpcProviders = () => [
-  new SingleJsonRpcProvider({ name: 'mainnet', chainId: ChainId.MAINNET }, `url_0`, log, SINGLE_PROVIDER_TEST_CONFIG),
-  new SingleJsonRpcProvider({ name: 'mainnet', chainId: ChainId.MAINNET }, `url_1`, log, SINGLE_PROVIDER_TEST_CONFIG),
-  new SingleJsonRpcProvider({ name: 'mainnet', chainId: ChainId.MAINNET }, `url_2`, log, SINGLE_PROVIDER_TEST_CONFIG),
+  new SingleJsonRpcProvider(
+    { name: 'mainnet', chainId: ChainId.MAINNET },
+    `url_0`,
+    log,
+    SINGLE_PROVIDER_TEST_CONFIG,
+    false,
+    1.0
+  ),
+  new SingleJsonRpcProvider(
+    { name: 'mainnet', chainId: ChainId.MAINNET },
+    `url_1`,
+    log,
+    SINGLE_PROVIDER_TEST_CONFIG,
+    false,
+    1.0
+  ),
+  new SingleJsonRpcProvider(
+    { name: 'mainnet', chainId: ChainId.MAINNET },
+    `url_2`,
+    log,
+    SINGLE_PROVIDER_TEST_CONFIG,
+    false,
+    1.0
+  ),
 ]
 
 const SINGLE_RPC_PROVIDERS = { [ChainId.MAINNET]: createNewSingleJsonRpcProviders() }
 
 const resetRpcProviders = () => {
   SINGLE_RPC_PROVIDERS[ChainId.MAINNET] = createNewSingleJsonRpcProviders()
-}
-
-const delay = (ms: number) => {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 describe('UniJsonRpcProvider', () => {
@@ -64,9 +81,9 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -94,6 +111,8 @@ describe('UniJsonRpcProvider', () => {
   })
 
   it('fallback when first provider becomes unhealthy', async () => {
+    // provider0 is unhealthy
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
     const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
     getBlockNumber0.rejects('error')
     const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
@@ -101,25 +120,8 @@ describe('UniJsonRpcProvider', () => {
     const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
     getBlockNumber2.resolves(123)
 
-    uniProvider.logProviderHealthScores()
+    uniProvider.logProviderHealthiness()
 
-    // Two failed calls makes provider0 unhealthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-
-    expect(uniProvider.lastUsedUrl).equals('url_0')
     expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
     expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
 
@@ -128,10 +130,12 @@ describe('UniJsonRpcProvider', () => {
     expect(uniProvider.lastUsedUrl).equals('url_1')
     await uniProvider.getBlockNumber()
     expect(uniProvider.lastUsedUrl).equals('url_1')
-    uniProvider.logProviderHealthScores()
+    uniProvider.logProviderHealthiness()
   })
 
   it('unhealthy provider successfully recovered', async () => {
+    // provider0 is unhealthy
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
     const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
     getBlockNumber0.rejects('error')
     const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
@@ -139,192 +143,25 @@ describe('UniJsonRpcProvider', () => {
     const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
     getBlockNumber2.resolves(123)
 
-    uniProvider.logProviderHealthScores()
+    uniProvider.logProviderHealthiness()
 
-    // Two failed calls makes provider0 unhealthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-
-    expect(uniProvider.lastUsedUrl).equals('url_0')
     expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
     expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-    uniProvider.logProviderHealthScores()
 
-    // This the failed provider starts recovering.
+    await uniProvider.getBlockNumber()
+    // provider1 is selected.
+    expect(uniProvider.lastUsedUrl).equals('url_1')
+
+    // provider0 then recovered.
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.HEALTHY
     getBlockNumber0.resolves(123)
 
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    uniProvider['providers'][0]['lastCallTimestampInMs'] -= 10000
-
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_1')
-    uniProvider.logProviderHealthScores()
-    // Give it some time for finishing async evaluation for unhealthy providers.
-    await delay(10)
-
-    // Provider0's health score has been up, but it's not considered fully recovered yet
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    uniProvider['providers'][0]['lastCallTimestampInMs'] -= 10000
-
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_1')
-    uniProvider.logProviderHealthScores()
-
-    // Give it some time for finishing async evaluation for unhealthy providers.
-    await delay(10)
-
-    // Provider0 is fully recovered.
     expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_0', 'url_1', 'url_2'])
     expect(uniProvider.currentUnhealthyUrls).to.be.empty
 
-    // From now on, we go back to use the original preferred provider (provider0)
     await uniProvider.getBlockNumber()
+    // Back to select provider0.
     expect(uniProvider.lastUsedUrl).equals('url_0')
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_0', 'url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.be.empty
-    uniProvider.logProviderHealthScores()
-
-    // Now later requests will be served with provider0
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_0')
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_0')
-  })
-
-  it('unhealthy provider has some challenge during recovering', async () => {
-    const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
-    getBlockNumber0.rejects('error')
-    const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
-    getBlockNumber1.resolves(123)
-    const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
-    getBlockNumber2.resolves(123)
-
-    uniProvider.logProviderHealthScores()
-
-    // Two failed calls makes provider0 unhealthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-
-    expect(uniProvider.lastUsedUrl).equals('url_0')
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-    uniProvider.logProviderHealthScores()
-
-    // We advance some time. During this the failed provider starts recovering.
-    const unhealthyProvider = uniProvider['providers'][0]
-    getBlockNumber0.resolves(123)
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    unhealthyProvider['lastCallTimestampInMs'] -= 1000
-
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_1')
-    // Give it some time for finishing async evaluation for unhealthy providers.
-    await delay(10)
-
-    uniProvider.logProviderHealthScores()
-    // 1 second isn't enough to start re-evaluate the failed provider.
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    unhealthyProvider['lastCallTimestampInMs'] -= 10000
-
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_1')
-    // Give it some time for finishing async evaluation for unhealthy providers.
-    await delay(10)
-
-    uniProvider.logProviderHealthScores()
-    // Provider0 has recovered quite a bit. But still not enough to be considered as fully recovered.
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-    expect(unhealthyProvider['healthScore']).gt(-50)
-    expect(unhealthyProvider['healthScore']).lt(-40)
-
-    getBlockNumber0.rejects('error during recovery evaluation')
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    unhealthyProvider['lastCallTimestampInMs'] -= 10000
-
-    await uniProvider.getBlockNumber()
-    expect(uniProvider.lastUsedUrl).equals('url_1')
-    // Give it some time for finishing async evaluation for unhealthy providers.
-    await delay(10)
-
-    uniProvider.logProviderHealthScores()
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.have.ordered.members(['url_0'])
-    // Provider0 failed again during recovery evaluation.
-    expect(unhealthyProvider['healthScore']).gt(-100)
-    expect(unhealthyProvider['healthScore']).lt(-90)
-  })
-
-  it('healthy provider can also drop score and resume score', async () => {
-    const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
-    getBlockNumber0.rejects('error')
-    const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
-    getBlockNumber1.resolves(123)
-    const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
-    getBlockNumber2.resolves(123)
-
-    uniProvider.logProviderHealthScores()
-
-    // One failed call reduce provider0's score, but it's still considered as healthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    const healthyProvider = uniProvider['providers'][0]
-    expect(healthyProvider['healthScore']).gte(-50)
-    expect(healthyProvider['healthScore']).lt(-49)
-
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    healthyProvider['lastCallTimestampInMs'] -= 2000
-    getBlockNumber0.resolves(123)
-
-    await uniProvider.getBlockNumber()
-    uniProvider.logProviderHealthScores()
-    expect(healthyProvider['healthScore']).gte(-40)
-    expect(healthyProvider['healthScore']).lt(-39)
-
-    // Dial back provider's last call time to simulate that it has some period of recovery.
-    healthyProvider['lastCallTimestampInMs'] -= 2000
-
-    await uniProvider.getBlockNumber()
-    uniProvider.logProviderHealthScores()
-    expect(healthyProvider['healthScore']).gte(-30)
-    expect(healthyProvider['healthScore']).lt(-29)
-
-    // Score deduct and resume doesn't make it a less-preferred provider, as long as it's considered as healthy
-    expect(uniProvider.currentHealthyUrls).to.have.ordered.members(['url_0', 'url_1', 'url_2'])
-    expect(uniProvider.currentUnhealthyUrls).to.be.empty
   })
 
   it('no healthy provider available', async () => {
@@ -353,9 +190,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [3, 1, 4],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [3, 1, 4]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -390,9 +228,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [3, ProviderSpecialWeight.NEVER, 4],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [3, ProviderSpecialWeight.NEVER, 4]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -423,9 +262,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, 4],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, 4]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -450,9 +290,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, 4],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, 4]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -479,9 +320,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [ProviderSpecialWeight.AS_FALLBACK, ProviderSpecialWeight.NEVER, 3],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [ProviderSpecialWeight.AS_FALLBACK, ProviderSpecialWeight.NEVER, 3]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -506,9 +348,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, ProviderSpecialWeight.AS_FALLBACK],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, ProviderSpecialWeight.AS_FALLBACK]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -533,9 +376,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER, ProviderSpecialWeight.NEVER]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -547,14 +391,90 @@ describe('UniJsonRpcProvider', () => {
     }).to.throw(Error)
   })
 
+  it('test selectPreferredProvider: in combination with provider fallback and recover, case 1', async () => {
+    uniProvider = new UniJsonRpcProvider(
+      ChainId.MAINNET,
+      SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
+      log,
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [1, ProviderSpecialWeight.NEVER, ProviderSpecialWeight.AS_FALLBACK]
+    )
+    for (const provider of uniProvider['providers']) {
+      provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
+    }
+
+    // Should always use the primary provider.
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_0')
+
+    // Primary provider fails.
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
+
+    // Should fallback to the next AS_FALLBACK provider
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_2')
+
+    // Primary provider recovers.
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.HEALTHY
+
+    // Should resume to the primary provider.
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_0')
+  })
+
+  it('test selectPreferredProvider: in combination with provider fallback and recover, case 2', async () => {
+    uniProvider = new UniJsonRpcProvider(
+      ChainId.MAINNET,
+      SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
+      log,
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [1, ProviderSpecialWeight.AS_FALLBACK, ProviderSpecialWeight.AS_FALLBACK]
+    )
+    for (const provider of uniProvider['providers']) {
+      provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
+    }
+
+    // Should always use the primary provider.
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_0')
+
+    // Primary provider fails.
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
+
+    // Should fallback to the next AS_FALLBACK provider.
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_1')
+
+    // Fallback provider also fails.
+    uniProvider['providers'][1]['healthiness'] = ProviderHealthiness.UNHEALTHY
+
+    // Should fallback to the next AS_FALLBACK provider.
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_2')
+
+    // Another fallback provider also fails.
+    uniProvider['providers'][2]['healthiness'] = ProviderHealthiness.UNHEALTHY
+
+    // No provider is able to be selected.
+    expect(function () {
+      uniProvider['selectPreferredProvider']()
+    }).to.throw(Error)
+
+    // As provider recovers, we should resume provider selection.
+    uniProvider['providers'][2]['healthiness'] = ProviderHealthiness.HEALTHY
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_2')
+    uniProvider['providers'][1]['healthiness'] = ProviderHealthiness.HEALTHY
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_1')
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.HEALTHY
+    expect(uniProvider['selectPreferredProvider']().url).equals('url_0')
+  })
+
   it('multiple UniJsonRpcProvider share the same instances of SingleJsonRpcProvider', async () => {
     const uniProvider1 = new UniJsonRpcProvider(
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider1['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -564,30 +484,18 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider2['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
     }
 
+    // Make provider0 unhealthy
     const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
     getBlockNumber0.rejects('error')
-
-    // Two failed calls makes provider0 unhealthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
 
     expect(uniProvider['selectPreferredProvider']().url).equals('url_1')
     expect(uniProvider1['selectPreferredProvider']().url).equals('url_1')
@@ -596,19 +504,8 @@ describe('UniJsonRpcProvider', () => {
     const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
     getBlockNumber1.rejects('error')
 
-    // Two failed calls makes provider1 unhealthy
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    try {
-      await uniProvider.getBlockNumber()
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
+    // Make provider1 unhealthy
+    uniProvider['providers'][1]['healthiness'] = ProviderHealthiness.UNHEALTHY
 
     expect(uniProvider['selectPreferredProvider']().url).equals('url_2')
     expect(uniProvider1['selectPreferredProvider']().url).equals('url_2')
@@ -622,9 +519,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [4, 1, 3],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [4, 1, 3]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -663,9 +561,9 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -683,23 +581,9 @@ describe('UniJsonRpcProvider', () => {
 
     // However, now provider0 throws error.
     getBlockNumber0.rejects('error')
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
 
-    // Two failed calls makes provider0 unhealthy.
-    try {
-      await uniProvider.getBlockNumber(sessionId)
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    try {
-      await uniProvider.getBlockNumber(sessionId)
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-
-    uniProvider.logProviderHealthScores()
+    uniProvider.logProviderHealthiness()
 
     // Although we pass in a session id, we accept fallback to another provider.
     await uniProvider.getBlockNumber(sessionId)
@@ -713,9 +597,9 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      false,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -733,22 +617,9 @@ describe('UniJsonRpcProvider', () => {
 
     // However, now provider0 throws error.
     getBlockNumber0.rejects('error')
+    uniProvider['providers'][0]['healthiness'] = ProviderHealthiness.UNHEALTHY
 
-    // Two failed calls makes provider0 unhealthy.
-    try {
-      await uniProvider.getBlockNumber(sessionId)
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
-    try {
-      await uniProvider.getBlockNumber(sessionId)
-      assert(false, 'Should not reach')
-    } catch (err: any) {
-      expect(err.name).equals('error')
-    }
-    uniProvider.logProviderHealthScores()
+    uniProvider.logProviderHealthiness()
 
     // Although we pass in a session id, we accept fallback to another provider.
     try {
@@ -765,9 +636,10 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      [4, 1, 3],
-      undefined,
-      UNI_PROVIDER_TEST_CONFIG
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      1.0,
+      [4, 1, 3]
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -803,9 +675,9 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      CUSTOM_UNI_PROVIDER_CONFIG
+      CUSTOM_UNI_PROVIDER_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -834,29 +706,20 @@ describe('UniJsonRpcProvider', () => {
     expect(spy2.callCount).to.equal(1)
     expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
 
-    expect(uniProvider['providers'][1]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][1]['lastLatencyEvaluationApiName']).equals('getBlockNumber')
-    expect(uniProvider['providers'][2]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][2]['lastLatencyEvaluationApiName']).equals('getBlockNumber')
-
-    // Selected provider should also record latency.
-    expect(uniProvider['providers'][0]['lastEvaluatedLatencyInMs']).equal(0)
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
   })
 
   it('Test we will not do shadow latency check calls too frequently', async () => {
     const CUSTOM_UNI_PROVIDER_CONFIG = UNI_PROVIDER_TEST_CONFIG
     CUSTOM_UNI_PROVIDER_CONFIG.ENABLE_SHADOW_LATENCY_EVALUATION = true
-    CUSTOM_UNI_PROVIDER_CONFIG.LATENCY_EVALUATION_WAIT_PERIOD_IN_S = 15
     uniProvider = new UniJsonRpcProvider(
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      CUSTOM_UNI_PROVIDER_CONFIG
+      CUSTOM_UNI_PROVIDER_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -885,11 +748,7 @@ describe('UniJsonRpcProvider', () => {
     expect(spy2.callCount).to.equal(1)
     expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
 
-    expect(uniProvider['providers'][0]['lastEvaluatedLatencyInMs']).equal(0)
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][1]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][2]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
 
     // Advance 1 second.
@@ -903,7 +762,6 @@ describe('UniJsonRpcProvider', () => {
     // 1 second is not long enough to allow another latency evaluation shadow call.
     expect(spy1.callCount).to.equal(0)
     expect(spy2.callCount).to.equal(0)
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
 
     // Advance another 15 seconds.
     sandbox.clock.tick(15000)
@@ -919,8 +777,6 @@ describe('UniJsonRpcProvider', () => {
     expect(spy2.callCount).to.equal(1)
     expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
-
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equal(timestamp + 16000)
   })
 
   it('Test we will not do shadow latency check calls too frequently, simultaneous multi entry', async () => {
@@ -931,9 +787,9 @@ describe('UniJsonRpcProvider', () => {
       ChainId.MAINNET,
       SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
       log,
-      undefined,
-      undefined,
-      CUSTOM_UNI_PROVIDER_CONFIG
+      CUSTOM_UNI_PROVIDER_CONFIG,
+      1.0,
+      1.0
     )
     for (const provider of uniProvider['providers']) {
       provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
@@ -968,11 +824,7 @@ describe('UniJsonRpcProvider', () => {
     expect(spy2.callCount).to.equal(1)
     expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
 
-    expect(uniProvider['providers'][0]['lastEvaluatedLatencyInMs']).equal(0)
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][1]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
-    expect(uniProvider['providers'][2]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
 
     spy0.resetHistory()
@@ -1035,11 +887,124 @@ describe('UniJsonRpcProvider', () => {
     expect(spy1.callCount).to.equal(1)
     expect(spy2.callCount).to.equal(1)
 
-    expect(uniProvider['providers'][0]['lastEvaluatedLatencyInMs']).equal(0)
-    expect(uniProvider['providers'][0]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
-    expect(uniProvider['providers'][1]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
-    expect(uniProvider['providers'][2]['lastEvaluatedLatencyInMs']).equal(0)
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
+  })
+
+  it('Test use of latencyEvaluationSampleProb', async () => {
+    const CUSTOM_UNI_PROVIDER_CONFIG = UNI_PROVIDER_TEST_CONFIG
+    CUSTOM_UNI_PROVIDER_CONFIG.ENABLE_SHADOW_LATENCY_EVALUATION = true
+    uniProvider = new UniJsonRpcProvider(
+      ChainId.MAINNET,
+      SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
+      log,
+      CUSTOM_UNI_PROVIDER_CONFIG,
+      0.5,
+      1.0
+    )
+    for (const provider of uniProvider['providers']) {
+      provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
+    }
+
+    const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
+    getBlockNumber0.resolves(123)
+    const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
+    getBlockNumber1.resolves(123)
+    const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
+    getBlockNumber2.resolves(123)
+
+    const spy0 = sandbox.spy(uniProvider['providers'][0], 'evaluateLatency')
+    const spy1 = sandbox.spy(uniProvider['providers'][1], 'evaluateLatency')
+    const spy2 = sandbox.spy(uniProvider['providers'][2], 'evaluateLatency')
+
+    const randStub = sandbox.stub(Math, 'random')
+
+    randStub.returns(0.6)
+    await uniProvider.getBlockNumber()
+    // 0.6 >= 0.5, Shadow evaluate call should not be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(0)
+    expect(spy2.callCount).to.equal(0)
+    spy0.resetHistory()
+    spy1.resetHistory()
+    spy2.resetHistory()
+
+    randStub.returns(0.5)
+    await uniProvider.getBlockNumber()
+    // 0.5 >= 0.5, Shadow evaluate call should not be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(0)
+    expect(spy2.callCount).to.equal(0)
+    spy0.resetHistory()
+    spy1.resetHistory()
+    spy2.resetHistory()
+
+    randStub.returns(0.4)
+    await uniProvider.getBlockNumber()
+    // 0.4 < 0.5, Shadow evaluate call should be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(1)
+    expect(spy1.getCalls()[0].firstArg).to.equal('getBlockNumber')
+    expect(spy2.callCount).to.equal(1)
+    expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
+  })
+
+  it('Test use of healthCheckSampleProb', async () => {
+    uniProvider = new UniJsonRpcProvider(
+      ChainId.MAINNET,
+      SINGLE_RPC_PROVIDERS[ChainId.MAINNET],
+      log,
+      UNI_PROVIDER_TEST_CONFIG,
+      1.0,
+      0.5
+    )
+    for (const provider of uniProvider['providers']) {
+      provider['config'] = SINGLE_PROVIDER_TEST_CONFIG
+    }
+
+    // Make provider1 and provider2 unhealthy
+    const getBlockNumber0 = sandbox.stub(uniProvider['providers'][0], '_getBlockNumber' as any)
+    getBlockNumber0.resolves(123)
+
+    uniProvider['providers'][1]['healthiness'] = ProviderHealthiness.UNHEALTHY
+    const getBlockNumber1 = sandbox.stub(uniProvider['providers'][1], '_getBlockNumber' as any)
+    getBlockNumber1.rejects('error')
+
+    uniProvider['providers'][2]['healthiness'] = ProviderHealthiness.UNHEALTHY
+    const getBlockNumber2 = sandbox.stub(uniProvider['providers'][2], '_getBlockNumber' as any)
+    getBlockNumber2.rejects('error')
+
+    const spy0 = sandbox.spy(uniProvider['providers'][0], 'evaluateHealthiness')
+    const spy1 = sandbox.spy(uniProvider['providers'][1], 'evaluateHealthiness')
+    const spy2 = sandbox.spy(uniProvider['providers'][2], 'evaluateHealthiness')
+
+    const randStub = sandbox.stub(Math, 'random')
+
+    randStub.returns(0.6)
+    await uniProvider.getBlockNumber()
+    // 0.6 >= 0.5, Shadow evaluate call should not be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(0)
+    expect(spy2.callCount).to.equal(0)
+    spy0.resetHistory()
+    spy1.resetHistory()
+    spy2.resetHistory()
+
+    randStub.returns(0.5)
+    await uniProvider.getBlockNumber()
+    // 0.5 >= 0.5, Shadow evaluate call should not be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(0)
+    expect(spy2.callCount).to.equal(0)
+    spy0.resetHistory()
+    spy1.resetHistory()
+    spy2.resetHistory()
+
+    randStub.returns(0.4)
+    await uniProvider.getBlockNumber()
+    // 0.4 < 0.5, Shadow evaluate call should be made
+    expect(spy0.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(1)
+    expect(spy2.callCount).to.equal(1)
   })
 })

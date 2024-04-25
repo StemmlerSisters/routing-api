@@ -14,7 +14,7 @@ import { LRUCache } from 'lru-cache'
 import { BigNumber, BigNumberish } from '@ethersproject/bignumber'
 import { Deferrable } from '@ethersproject/properties'
 import Logger from 'bunyan'
-import { DEFAULT_UNI_PROVIDER_CONFIG, UniJsonRpcProviderConfig } from './config'
+import { UniJsonRpcProviderConfig } from './config'
 
 export class UniJsonRpcProvider extends StaticJsonRpcProvider {
   readonly chainId: ChainId = ChainId.MAINNET
@@ -25,14 +25,14 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
   // one of the healthy providers.
   // If not provided, we will only give non-zero weight to the first provider.
   private urlWeight: Record<string, number> = {}
-
   private lastUsedProvider: SingleJsonRpcProvider | null = null
-
   private sessionCache: LRUCache<string, SingleJsonRpcProvider> = new LRUCache({ max: 1000 })
+
+  private latencyEvaluationSampleProb: number
+  private healthCheckSampleProb: number
 
   // If true, it's allowed to use a different provider if the preferred provider isn't healthy.
   private readonly sessionAllowProviderFallbackWhenUnhealthy: boolean = true
-
   private config: UniJsonRpcProviderConfig
 
   private readonly log: Logger
@@ -46,6 +46,9 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
    * @param chainId
    * @param singleRpcProviders
    * @param log
+   * @param config
+   * @param latencyEvaluationSampleProb
+   * @param healthCheckSampleProb
    * @param weights
    *  Positive value represents provider weight when selecting from different healthy providers.
    *  It's usually a positive integer value.
@@ -54,20 +57,23 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
    *    AS_FALLBACK(-1) means this provider will only be able to be selected when no healthy provider has positive weights. In that case, the first healthy provider with -1 will be selected.
    *  Not providing this argument means using -1 for all weight values.
    * @param sessionAllowProviderFallbackWhenUnhealthy
-   * @param config
    */
   constructor(
     chainId: ChainId,
     singleRpcProviders: SingleJsonRpcProvider[],
     log: Logger,
+    config: UniJsonRpcProviderConfig,
+    latencyEvaluationSampleProb: number,
+    healthCheckSampleProb: number,
     weights?: number[],
-    sessionAllowProviderFallbackWhenUnhealthy?: boolean,
-    config: UniJsonRpcProviderConfig = DEFAULT_UNI_PROVIDER_CONFIG
+    sessionAllowProviderFallbackWhenUnhealthy?: boolean
   ) {
     // Dummy super constructor call is needed.
     super('dummy_url', { chainId, name: 'dummy_network' })
     this.log = log
     this.config = config
+    this.latencyEvaluationSampleProb = latencyEvaluationSampleProb
+    this.healthCheckSampleProb = healthCheckSampleProb
 
     if (isEmpty(singleRpcProviders)) {
       throw new Error('Empty singlePrcProviders')
@@ -144,7 +150,7 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
       }
     }
 
-    this.logProviderHealthScores()
+    this.logProviderHealthiness()
 
     const healthyProviders = this.providers.filter((provider) => provider.isHealthy())
     if (isEmpty(healthyProviders)) {
@@ -182,6 +188,9 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
       if (provider.url === selectedProvider.url) {
         continue
       }
+      if (Math.random() >= this.healthCheckSampleProb) {
+        continue
+      }
       if (
         !provider.isEvaluatingHealthiness() &&
         provider.hasEnoughWaitSinceLastHealthinessEvaluation(1000 * this.config.HEALTH_EVALUATION_WAIT_PERIOD_IN_S)
@@ -207,6 +216,9 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
       if (!MAJOR_METHOD_NAMES.includes(methodName)) {
         continue
       }
+      if (Math.random() >= this.latencyEvaluationSampleProb) {
+        continue
+      }
       if (
         !provider.isEvaluatingLatency() &&
         provider.hasEnoughWaitSinceLastLatencyEvaluation(1000 * this.config.LATENCY_EVALUATION_WAIT_PERIOD_IN_S)
@@ -220,14 +232,12 @@ export class UniJsonRpcProvider extends StaticJsonRpcProvider {
     this.log.debug(`Evaluated ${count} other healthy providers`)
   }
 
-  logProviderHealthScores() {
+  logProviderHealthiness() {
     for (const provider of this.providers.filter((provider) => provider.isHealthy())) {
-      this.log.debug(`Healthy provider, url: ${provider.url}, score: ${provider['healthScore']}`)
-      provider.logHealthMetrics()
+      this.log.debug(`Healthy provider: ${provider.url}`)
     }
     for (const provider of this.providers.filter((provider) => !provider.isHealthy())) {
-      this.log.debug(`Unhealthy provider, url: ${provider.url}, score: ${provider['healthScore']}`)
-      provider.logHealthMetrics()
+      this.log.debug(`Unhealthy provider: ${provider.url}`)
     }
   }
 

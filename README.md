@@ -16,7 +16,7 @@ The best way to develop and test the API is to deploy your own instance to AWS.
 2. Create .env file in the root directory of the project with :
    ```
    THROTTLE_PER_FIVE_MINS = '' # Optional
-   JSON_RPC_PROVIDER_{CHAIN ID} = { RPC Provider}
+   WEB3_RPC_{CHAIN ID} = { RPC Provider}
    # RPC Providers must be set for the following CHAIN IDs:
    # MAINNET = 1
    # ROPSTEN = 3
@@ -91,7 +91,7 @@ Integration tests run against a local DynamoDB node deployed using [dynamodb-loc
 
 The end-to-end tests fetch quotes from your deployed API, then execute the swaps on a Hardhat mainnet fork.
 
-1. First deploy your test API using the intructions above. Then update your `.env` file with the URL of the API, and the RPC URL of an archive node:
+1. First deploy your test API using the instructions above. Then update your `.env` file with the URL of the API, and the RPC URL of an archive node:
 
    ```
    UNISWAP_ROUTING_API='...'
