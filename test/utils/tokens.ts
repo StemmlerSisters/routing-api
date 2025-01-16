@@ -15,23 +15,29 @@ import {
   log,
   NodeJSCache,
   USDC_ARBITRUM,
+  USDC_UNICHAIN_SEPOLIA,
   USDC_AVAX,
+  USDC_BASE,
+  USDC_BASE_GOERLI,
   USDC_BNB,
   USDC_GOERLI,
   USDC_MAINNET,
+  USDT_MONAD_TESTNET,
   USDC_OPTIMISM,
   USDC_OPTIMISM_GOERLI,
   USDC_POLYGON,
   USDC_POLYGON_MUMBAI,
   USDC_SEPOLIA,
+  USDC_WORLDCHAIN,
+  USDC_ZORA,
+  USDCE_ZKSYNC,
   USDT_ARBITRUM,
   USDT_BNB,
   USDT_GOERLI,
   USDT_MAINNET,
   USDT_OPTIMISM,
   WRAPPED_NATIVE_CURRENCY,
-  USDC_BASE,
-  USDC_BASE_GOERLI,
+  USDC_BASE_SEPOLIA,
 } from '@uniswap/smart-order-router'
 import { ethers } from 'ethers'
 import NodeCache from 'node-cache'
@@ -101,6 +107,8 @@ export const USDT_ON = (chainId: ChainId): Token => {
       return USDT_ARBITRUM
     case ChainId.BNB:
       return USDT_BNB
+    case ChainId.MONAD_TESTNET:
+      return USDT_MONAD_TESTNET
     default:
       throw new Error(`Chain id: ${chainId} not supported`)
   }
@@ -132,6 +140,16 @@ export const USDC_ON = (chainId: ChainId): Token => {
       return USDC_BASE
     case ChainId.BASE_GOERLI:
       return USDC_BASE_GOERLI
+    case ChainId.ZORA:
+      return USDC_ZORA
+    case ChainId.ZKSYNC:
+      return USDCE_ZKSYNC
+    case ChainId.WORLDCHAIN:
+      return USDC_WORLDCHAIN
+    case ChainId.UNICHAIN_SEPOLIA:
+      return USDC_UNICHAIN_SEPOLIA
+    case ChainId.BASE_SEPOLIA:
+      return USDC_BASE_SEPOLIA
     default:
       throw new Error(`Chain id: ${chainId} not supported`)
   }

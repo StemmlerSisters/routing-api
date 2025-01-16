@@ -2,106 +2,82 @@ import { expect } from '@jest/globals'
 import { QuoteHandler } from '../../../../lib/handlers/quote/quote'
 import { ChainId } from '@uniswap/sdk-core'
 import { Protocol } from '@uniswap/router-sdk'
+import { UniversalRouterVersion } from '@uniswap/universal-router-sdk'
 
 describe('QuoteHandler', () => {
   describe('.protocolsFromRequest', () => {
     it('returns V3 when no protocols are requested', () => {
-      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, undefined, '', undefined, undefined)).toEqual([
-        Protocol.V3,
-      ])
+      expect(
+        QuoteHandler.protocolsFromRequest(ChainId.MAINNET, UniversalRouterVersion.V1_2, undefined, undefined)
+      ).toEqual([Protocol.V3])
     })
 
-    it('returns V3 when forceCrossProtocols is false', () => {
-      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, undefined, '', undefined, false)).toEqual([Protocol.V3])
+    it('returns V3 when forceCrossProtocol is false', () => {
+      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, UniversalRouterVersion.V1_2, undefined, false)).toEqual(
+        [Protocol.V3]
+      )
     })
 
-    it('returns empty when forceCrossProtocols is true', () => {
-      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, undefined, '', undefined, true)).toEqual([])
+    it('returns empty when forceCrossProtocol is true', () => {
+      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, UniversalRouterVersion.V1_2, undefined, true)).toEqual(
+        []
+      )
     })
 
     it('returns requested protocols', () => {
       expect(
-        QuoteHandler.protocolsFromRequest(ChainId.MAINNET, ['v2', 'v3', 'mixed'], '', undefined, undefined)
+        QuoteHandler.protocolsFromRequest(
+          ChainId.MAINNET,
+          UniversalRouterVersion.V1_2,
+          ['v2', 'v3', 'mixed'],
+          undefined
+        )
       ).toEqual([Protocol.V2, Protocol.V3, Protocol.MIXED])
     })
 
     it('returns a different set of requested protocols', () => {
-      expect(QuoteHandler.protocolsFromRequest(ChainId.MAINNET, ['v3', 'mixed'], '', undefined, undefined)).toEqual([
-        Protocol.V3,
-        Protocol.MIXED,
-      ])
+      expect(
+        QuoteHandler.protocolsFromRequest(ChainId.MAINNET, UniversalRouterVersion.V1_2, ['v3', 'mixed'], undefined)
+      ).toEqual([Protocol.V3, Protocol.MIXED])
     })
 
     it('works with other chains', () => {
-      expect(QuoteHandler.protocolsFromRequest(ChainId.BASE, ['v2', 'v3', 'mixed'], '', undefined, undefined)).toEqual([
-        Protocol.V2,
-        Protocol.V3,
-        Protocol.MIXED,
-      ])
+      expect(
+        QuoteHandler.protocolsFromRequest(ChainId.BASE, UniversalRouterVersion.V1_2, ['v2', 'v3', 'mixed'], undefined)
+      ).toEqual([Protocol.V2, Protocol.V3, Protocol.MIXED])
     })
 
     it('returns undefined when a requested protocol is invalid', () => {
       expect(
-        QuoteHandler.protocolsFromRequest(ChainId.BASE, ['v2', 'v3', 'mixed', 'miguel'], '', undefined, undefined)
+        QuoteHandler.protocolsFromRequest(
+          ChainId.BASE,
+          UniversalRouterVersion.V1_2,
+          ['v2', 'v3', 'mixed', 'miguel'],
+          undefined
+        )
       ).toBeUndefined()
     })
 
-    describe('for mobile request', () => {
-      it('removes v2 and mixed with other chains, when the requested source is mobile', () => {
-        ;['uniswap-ios', 'uniswap-android'].forEach((requestSource) => {
-          expect(
-            QuoteHandler.protocolsFromRequest(ChainId.BASE, ['v2', 'v3', 'mixed'], requestSource, undefined, undefined)
-          ).toEqual([Protocol.V3])
-        })
-      })
+    it('returns v2, v3, mixed when universal router version is v1.2', () => {
+      expect(
+        QuoteHandler.protocolsFromRequest(
+          ChainId.MAINNET,
+          UniversalRouterVersion.V1_2,
+          ['v2', 'v3', 'v4', 'mixed'],
+          undefined
+        )
+      ).toEqual([Protocol.V2, Protocol.V3, Protocol.MIXED])
+    })
 
-      it('removes v2 and mixed with other chains, when the requested source is mobile, and version 1.22, 1.22.5 or 1.23', () => {
-        ;['uniswap-ios', 'uniswap-android'].forEach((requestSource) => {
-          ;['1.22', '1.22.5', '1.23'].forEach((appVersion) => {
-            expect(
-              QuoteHandler.protocolsFromRequest(
-                ChainId.BASE,
-                ['v2', 'v3', 'mixed'],
-                requestSource,
-                appVersion,
-                undefined
-              )
-            ).toEqual([Protocol.V3])
-          })
-        })
-      })
-
-      it('allows v2 and mixed with mainnet, even when the requested source is mobile, and version 1.22, 1.22.5 or 1.23', () => {
-        ;['uniswap-ios', 'uniswap-android'].forEach((requestSource) => {
-          ;['1.22', '1.22.5', '1.23', '1.23.build-0'].forEach((appVersion) => {
-            expect(
-              QuoteHandler.protocolsFromRequest(
-                ChainId.MAINNET,
-                ['v2', 'v3', 'mixed'],
-                requestSource,
-                appVersion,
-                undefined
-              )
-            ).toEqual([Protocol.V2, Protocol.V3, Protocol.MIXED])
-          })
-        })
-      })
-
-      it('allows v2 and mixed with other chains, when the requested source is mobile, and version is 1.24 or greater', () => {
-        ;['uniswap-ios', 'uniswap-android'].forEach((requestSource) => {
-          ;['1.24', '1.25', '1.25.5', '1.26', '1.26.test'].forEach((appVersion) => {
-            expect(
-              QuoteHandler.protocolsFromRequest(
-                ChainId.BASE,
-                ['v2', 'v3', 'mixed'],
-                requestSource,
-                appVersion,
-                undefined
-              )
-            ).toEqual([Protocol.V2, Protocol.V3, Protocol.MIXED])
-          })
-        })
-      })
+    it('returns v2, v3, v4, mixed when universal router version is v2.0', () => {
+      expect(
+        QuoteHandler.protocolsFromRequest(
+          ChainId.MAINNET,
+          UniversalRouterVersion.V2_0,
+          ['v2', 'v3', 'v4', 'mixed'],
+          undefined
+        )
+      ).toEqual([Protocol.V2, Protocol.V3, Protocol.V4, Protocol.MIXED])
     })
   })
 })

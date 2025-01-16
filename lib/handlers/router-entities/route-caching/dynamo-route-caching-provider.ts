@@ -3,19 +3,21 @@ import {
   CachedRoutes,
   CacheMode,
   ID_TO_NETWORK_NAME,
+  INTENT,
   IRouteCachingProvider,
   log,
   metric,
   MetricLoggerUnit,
   routeToString,
+  SupportedRoutes,
 } from '@uniswap/smart-order-router'
 import { AWSError, DynamoDB, Lambda } from 'aws-sdk'
 import { ChainId, Currency, CurrencyAmount, Fraction, Token, TradeType } from '@uniswap/sdk-core'
 import { Protocol } from '@uniswap/router-sdk'
 import { PairTradeTypeChainId } from './model/pair-trade-type-chain-id'
 import { CachedRoutesMarshaller } from '../../marshalling/cached-routes-marshaller'
-import { MixedRoute, V2Route, V3Route } from '@uniswap/smart-order-router/build/main/routers'
 import { PromiseResult } from 'aws-sdk/lib/request'
+import { DEFAULT_BLOCKS_TO_LIVE_ROUTES_DB } from '../../../util/defaultBlocksToLiveRoutesDB'
 
 interface ConstructorParams {
   /**
@@ -29,7 +31,7 @@ interface ConstructorParams {
   /**
    * The Lambda Function Name for the Lambda that will be invoked to fill the cache
    */
-  cachingQuoteLambdaName: string
+  cachingQuoteLambdaName?: string
 }
 
 export class DynamoRouteCachingProvider extends IRouteCachingProvider {
@@ -37,49 +39,12 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
   private readonly lambdaClient: Lambda
   private readonly routesTableName: string
   private readonly routesCachingRequestFlagTableName: string
-  private readonly cachingQuoteLambdaName: string
+  private readonly cachingQuoteLambdaName?: string
 
   private readonly DEFAULT_CACHEMODE_ROUTES_DB = CacheMode.Livemode
   private readonly ROUTES_DB_TTL = 24 * 60 * 60 // 24 hours
   private readonly ROUTES_DB_FLAG_TTL = 2 * 60 // 2 minutes
 
-  // heuristic is within 30 seconds we find a route.
-  // we know each chain block time
-  // divide those two
-  private readonly DEFAULT_BLOCKS_TO_LIVE_ROUTES_DB = (chainId: ChainId) => {
-    switch (chainId) {
-      // https://dune.com/queries/2138021
-      case ChainId.ARBITRUM_ONE:
-        return 100
-
-      // https://dune.com/queries/2009572
-      case ChainId.BASE:
-      case ChainId.OPTIMISM:
-        return 60
-
-      // https://snowtrace.io/chart/blocktime
-      case ChainId.AVALANCHE:
-        return 15
-
-      // https://dune.com/KARTOD/blockchains-analysis
-      case ChainId.BNB:
-        return 10
-
-      // https://dune.com/KARTOD/blockchains-analysis
-      case ChainId.POLYGON:
-        return 15
-
-      //  https://explorer.celo.org/mainnet/
-      case ChainId.CELO:
-        return 6
-
-      // https://dune.com/KARTOD/blockchains-analysis
-      case ChainId.MAINNET:
-      default:
-        return 2
-    }
-  }
-  // For the Ratio we are approximating Phi (Golden Ratio) by creating a fraction with 2 consecutive Fibonacci numbers
   private readonly ROUTES_DB_BUCKET_RATIO: Fraction = new Fraction(514229, 317811)
   private readonly ROUTES_TO_TAKE_FROM_ROUTES_DB = 8
   private readonly BLOCKS_DIFF_BETWEEN_CACHING_QUOTES: Map<ChainId, number> = new Map([[ChainId.MAINNET, 3]])
@@ -114,7 +79,7 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
    * @protected
    */
   protected async _getBlocksToLive(cachedRoutes: CachedRoutes, _: CurrencyAmount<Currency>): Promise<number> {
-    return this.DEFAULT_BLOCKS_TO_LIVE_ROUTES_DB(cachedRoutes.chainId)
+    return DEFAULT_BLOCKS_TO_LIVE_ROUTES_DB[cachedRoutes.chainId]
   }
 
   /**
@@ -123,25 +88,28 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
    *
    * @param chainId
    * @param amount
-   * @param quoteToken
+   * @param quoteCurrency
    * @param tradeType
-   * @param _protocols
+   * @param protocols
    * @protected
    */
   protected async _getCachedRoute(
     chainId: ChainId,
     amount: CurrencyAmount<Currency>,
-    quoteToken: Token,
+    quoteCurrency: Currency,
     tradeType: TradeType,
     protocols: Protocol[],
     currentBlockNumber: number,
     optimistic: boolean
   ): Promise<CachedRoutes | undefined> {
-    const { tokenIn, tokenOut } = this.determineTokenInOut(amount, quoteToken, tradeType)
+    const { currencyIn, currencyOut } = this.determineCurrencyInOut(amount, quoteCurrency, tradeType)
+
+    // for getting the cached routes, we dont know if the cached route will contains a v4 pool or not, so we try to see if the input protocols contain v4
+    const includesV4Pool = protocols.includes(Protocol.V4)
 
     const partitionKey = new PairTradeTypeChainId({
-      tokenIn: tokenIn.address,
-      tokenOut: tokenOut.address,
+      currencyIn: PairTradeTypeChainId.deriveCurrencyAddress(includesV4Pool, currencyIn),
+      currencyOut: PairTradeTypeChainId.deriveCurrencyAddress(includesV4Pool, currencyOut),
       tradeType,
       chainId,
     })
@@ -164,6 +132,7 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
       const result = await this.ddbClient.query(queryParams).promise()
       if (result.Items && result.Items.length > 0) {
         metric.putMetric('RoutesDbPreFilterEntriesFound', result.Items.length, MetricLoggerUnit.Count)
+
         // At this point we might have gotten all the routes we have discovered in the last 24 hours for this pair
         // We will sort the routes by blockNumber, and take the first `ROUTES_TO_TAKE_FROM_ROUTES_DB` routes
         const filteredItems = result.Items
@@ -198,19 +167,73 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
   ): CachedRoutes {
     metric.putMetric(`RoutesDbEntriesFound`, result.Items!.length, MetricLoggerUnit.Count)
     const cachedRoutesArr: CachedRoutes[] = result.Items!.map((record) => {
-      // If we got a response with more than 1 item, we extract the binary field from the response
-      const itemBinary = record.item
-      // Then we convert it into a Buffer
-      const cachedRoutesBuffer = Buffer.from(itemBinary)
-      // We convert that buffer into string and parse as JSON (it was encoded as JSON when it was inserted into cache)
-      const cachedRoutesJson = JSON.parse(cachedRoutesBuffer.toString())
-      // Finally we unmarshal that JSON into a `CachedRoutes` object
-      return CachedRoutesMarshaller.unmarshal(cachedRoutesJson)
+      if (record.plainRoutes && record.plainRoutes?.toString().trim() !== '') {
+        metric.putMetric(`RoutesDbEntryPlainTextRouteFound`, 1, MetricLoggerUnit.Count)
+
+        const cachedRoutesJson = JSON.parse(record.plainRoutes)
+        return CachedRoutesMarshaller.unmarshal(cachedRoutesJson)
+      } else {
+        // Once this metric drops to zero, then we can stop writing binaryCachedRoutes into the item column
+        metric.putMetric(`RoutesDbEntrySerializedRouteFound`, 1, MetricLoggerUnit.Count)
+
+        // If we got a response with more than 1 item, we extract the binary field from the response
+        const itemBinary = record.item
+        // Then we convert it into a Buffer
+        const cachedRoutesBuffer = Buffer.from(itemBinary)
+        // We convert that buffer into string and parse as JSON (it was encoded as JSON when it was inserted into cache)
+        const cachedRoutesJson = JSON.parse(cachedRoutesBuffer.toString())
+        // Finally we unmarshal that JSON into a `CachedRoutes` object
+        return CachedRoutesMarshaller.unmarshal(cachedRoutesJson)
+      }
     })
 
-    const routesMap: Map<string, CachedRoute<V3Route | V2Route | MixedRoute>> = new Map()
+    const routesMap: Map<string, CachedRoute<SupportedRoutes>> = new Map()
     let blockNumber: number = 0
     let originalAmount: string = ''
+
+    // Log metrics how often we might be using expired cached routes when we shouldn't.
+    // Plan to fix this by filtering below, but for now we want to know how often this happens and where.
+    const numberOfExpiredCachedRoutes = cachedRoutesArr.filter(
+      (cachedRoutes) => !cachedRoutes.notExpired(currentBlockNumber, optimistic)
+    ).length
+    const numberOfNotExpiredCachedRoutes = cachedRoutesArr.length - numberOfExpiredCachedRoutes
+    if (numberOfExpiredCachedRoutes > 0 && numberOfNotExpiredCachedRoutes > 0) {
+      metric.putMetric(`RoutesDbArrayWithMixedExpiredCachedRoutes_Opt_${optimistic}`, 1, MetricLoggerUnit.Count)
+      metric.putMetric(
+        `RoutesDbArrayWithMixedExpiredCachedRoutes_${ID_TO_NETWORK_NAME(chainId)}_Opt_${optimistic}`,
+        1,
+        MetricLoggerUnit.Count
+      )
+      // log number of expired cached routes
+      metric.putMetric(
+        `RoutesDbArrayWithMixedExpiredCachedRoutesCount_Opt_${optimistic}`,
+        numberOfExpiredCachedRoutes,
+        MetricLoggerUnit.Count
+      )
+      metric.putMetric(
+        `RoutesDbArrayWithMixedExpiredCachedRoutesCount_${ID_TO_NETWORK_NAME(chainId)}_Opt_${optimistic}`,
+        numberOfExpiredCachedRoutes,
+        MetricLoggerUnit.Count
+      )
+      // and total
+      metric.putMetric(
+        `RoutesDbArrayWithMixedExpiredCachedRoutesTotal_Opt_${optimistic}`,
+        cachedRoutesArr.length,
+        MetricLoggerUnit.Count
+      )
+      metric.putMetric(
+        `RoutesDbArrayWithMixedExpiredCachedRoutesTotal_${ID_TO_NETWORK_NAME(chainId)}_Opt_${optimistic}`,
+        cachedRoutesArr.length,
+        MetricLoggerUnit.Count
+      )
+    } else {
+      metric.putMetric(`RoutesDbArrayWithoutMixedExpiredCachedRoutes_Opt_${optimistic}`, 1, MetricLoggerUnit.Count)
+      metric.putMetric(
+        `RoutesDbArrayWithoutMixedExpiredCachedRoutes_${ID_TO_NETWORK_NAME(chainId)}_Opt_${optimistic}`,
+        1,
+        MetricLoggerUnit.Count
+      )
+    }
 
     cachedRoutesArr.forEach((cachedRoutes) => {
       metric.putMetric(`RoutesDbPerBlockFound`, cachedRoutes.routes.length, MetricLoggerUnit.Count)
@@ -239,8 +262,8 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
     const cachedRoutes = new CachedRoutes({
       routes: Array.from(routesMap.values()),
       chainId: first.chainId,
-      tokenIn: first.tokenIn,
-      tokenOut: first.tokenOut,
+      currencyIn: first.currencyIn,
+      currencyOut: first.currencyOut,
       protocolsCovered: first.protocolsCovered,
       blockNumber,
       tradeType: first.tradeType,
@@ -314,7 +337,7 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
       // if no Item is found it means we need to send a caching request
       if (shouldSendCachingRequest) {
         metric.putMetric('CachingQuoteForRoutesDbRequestSent', 1, MetricLoggerUnit.Count)
-        this.sendAsyncCachingRequest(partitionKey, [Protocol.V2, Protocol.V3, Protocol.MIXED], amount)
+        this.sendAsyncCachingRequest(partitionKey, [Protocol.V2, Protocol.V3, Protocol.V4, Protocol.MIXED], amount)
         this.setRoutesDbCachingIntentFlag(partitionKey, amount, currentBlockNumber)
       } else {
         metric.putMetric('CachingQuoteForRoutesDbRequestNotNeeded', 1, MetricLoggerUnit.Count)
@@ -331,27 +354,34 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
   ): void {
     const payload = {
       queryStringParameters: {
-        tokenInAddress: partitionKey.tokenIn,
+        tokenInAddress: partitionKey.currencyIn,
         tokenInChainId: partitionKey.chainId.toString(),
-        tokenOutAddress: partitionKey.tokenOut,
+        tokenOutAddress: partitionKey.currencyOut,
         tokenOutChainId: partitionKey.chainId.toString(),
         amount: amount.quotient.toString(),
         type: partitionKey.tradeType === 0 ? 'exactIn' : 'exactOut',
         protocols: protocols.map((protocol) => protocol.toLowerCase()).join(','),
-        intent: 'caching',
+        intent: INTENT.CACHING,
         requestSource: 'routing-api',
       },
     }
 
-    const params = {
-      FunctionName: this.cachingQuoteLambdaName,
-      InvocationType: 'Event',
-      Payload: JSON.stringify(payload),
+    if (this.cachingQuoteLambdaName) {
+      const params = {
+        FunctionName: this.cachingQuoteLambdaName,
+        InvocationType: 'Event',
+        Payload: JSON.stringify(payload),
+      }
+
+      log.info(`[DynamoRouteCachingProvider] Sending async caching request to lambda ${JSON.stringify(params)}`)
+      metric.putMetric(
+        `CachingQuoteForRoutesDbRequestSentToLambda${this.cachingQuoteLambdaName}`,
+        1,
+        MetricLoggerUnit.Count
+      )
+
+      this.lambdaClient.invoke(params).promise()
     }
-
-    log.info(`[DynamoRouteCachingProvider] Sending async caching request to lambda ${JSON.stringify(params)}`)
-
-    this.lambdaClient.invoke(params).promise()
   }
 
   private setRoutesDbCachingIntentFlag(
@@ -384,8 +414,8 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
       const individualCachedRoutes = new CachedRoutes({
         routes: [route],
         chainId: cachedRoutes.chainId,
-        tokenIn: cachedRoutes.tokenIn,
-        tokenOut: cachedRoutes.tokenOut,
+        currencyIn: cachedRoutes.currencyIn,
+        currencyOut: cachedRoutes.currencyOut,
         protocolsCovered: cachedRoutes.protocolsCovered,
         blockNumber: cachedRoutes.blockNumber,
         tradeType: cachedRoutes.tradeType,
@@ -409,6 +439,7 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
             blockNumber: cachedRoutes.blockNumber,
             protocol: route.protocol.toString(),
             item: binaryCachedRoutes,
+            plainRoutes: jsonCachedRoutes,
             ttl: ttl,
           },
         },
@@ -471,6 +502,9 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
     _blockNumber: number,
     _optimistic: boolean
   ): CachedRoutes | undefined {
+    // we can revert it back to never filter expired cached routes in read path
+    // we will use blocks-to-live in the write cached routes path
+    // also we can verify that cached routes cache invalidation bug error is gone in sepolia, as we removed hardcoding for sepolia
     return cachedRoutes
   }
 
@@ -478,19 +512,19 @@ export class DynamoRouteCachingProvider extends IRouteCachingProvider {
    * Helper function to determine the tokenIn and tokenOut given the tradeType, quoteToken and amount.currency
    *
    * @param amount
-   * @param quoteToken
+   * @param quoteCurrency
    * @param tradeType
    * @private
    */
-  private determineTokenInOut(
+  private determineCurrencyInOut(
     amount: CurrencyAmount<Currency>,
-    quoteToken: Token,
+    quoteCurrency: Currency,
     tradeType: TradeType
-  ): { tokenIn: Token; tokenOut: Token } {
+  ): { currencyIn: Currency; currencyOut: Currency } {
     if (tradeType == TradeType.EXACT_INPUT) {
-      return { tokenIn: amount.currency.wrapped, tokenOut: quoteToken }
+      return { currencyIn: amount.currency, currencyOut: quoteCurrency }
     } else {
-      return { tokenIn: quoteToken, tokenOut: amount.currency.wrapped }
+      return { currencyIn: quoteCurrency, currencyOut: amount.currency }
     }
   }
 }

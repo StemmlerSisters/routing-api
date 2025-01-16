@@ -4,7 +4,7 @@ import JSBI from 'jsbi'
 import { TradeTypeParam } from './schema/quote-schema'
 import { computePortionAmount, parseDeadline, parseSlippageTolerance, populateFeeOptions } from '../shared'
 import { PermitSingle } from '@uniswap/permit2-sdk'
-import { UNIVERSAL_ROUTER_ADDRESS } from '@uniswap/universal-router-sdk'
+import { UNIVERSAL_ROUTER_ADDRESS, UniversalRouterVersion } from '@uniswap/universal-router-sdk'
 import { utils } from 'ethers'
 
 export type SwapOptionsUniversalRouterInput = {
@@ -12,6 +12,7 @@ export type SwapOptionsUniversalRouterInput = {
   currencyIn: Currency
   currencyOut: Currency
   tradeType: TradeTypeParam
+  universalRouterVersion: UniversalRouterVersion
   amountRaw: string
   slippageTolerance?: string
   enableUniversalRouter?: boolean
@@ -48,6 +49,7 @@ export class SwapOptionsFactory {
     currencyIn,
     currencyOut,
     tradeType,
+    universalRouterVersion,
     amountRaw,
     slippageTolerance,
     enableUniversalRouter,
@@ -69,6 +71,7 @@ export class SwapOptionsFactory {
         currencyIn,
         currencyOut,
         tradeType,
+        universalRouterVersion,
         slippageTolerance,
         portionBips,
         portionRecipient,
@@ -103,6 +106,7 @@ export class SwapOptionsFactory {
     currencyIn,
     currencyOut,
     tradeType,
+    universalRouterVersion,
     slippageTolerance,
     portionBips,
     portionRecipient,
@@ -131,6 +135,7 @@ export class SwapOptionsFactory {
 
     const swapParams: SwapOptions = {
       type: SwapType.UNIVERSAL_ROUTER,
+      version: universalRouterVersion,
       deadlineOrPreviousBlockhash: deadline ? parseDeadline(deadline) : undefined,
       recipient: recipient,
       slippageTolerance: parseSlippageTolerance(slippageTolerance),
@@ -138,6 +143,11 @@ export class SwapOptionsFactory {
     }
 
     if (permitSignature && permitNonce && permitExpiration && permitAmount && permitSigDeadline) {
+      // in case of v4 native input, we might not want to compose permit2 at all, because native currency cannot be issued permit2.
+      // however there's still a chance, for v4, a native input has a wrapped pool has best routing. in that case, we still need permit2.
+      // for now, SOR v4 routing cannot support native currency input with the wrapped pool routing, although v4-sdk can support that.
+      // so we just leave as is here. ud-sdk should be able to tell to not issue permit2 because it could go through the v4 native pool in the route object
+      // as part of routing-api response.
       const permit: PermitSingle = {
         details: {
           token: currencyIn.wrapped.address,
@@ -145,7 +155,7 @@ export class SwapOptionsFactory {
           expiration: permitExpiration,
           nonce: permitNonce,
         },
-        spender: UNIVERSAL_ROUTER_ADDRESS(chainId),
+        spender: UNIVERSAL_ROUTER_ADDRESS(universalRouterVersion, chainId),
         sigDeadline: permitSigDeadline,
       }
 

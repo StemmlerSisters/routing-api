@@ -3,21 +3,24 @@ import { Protocol } from '@uniswap/router-sdk'
 import { ChainId, Currency, CurrencyAmount, Token, TradeType } from '@uniswap/sdk-core'
 import {
   AlphaRouterConfig,
+  getAddress,
   ID_TO_NETWORK_NAME,
   IMetric,
   IRouter,
   MetricLoggerUnit,
   routeAmountsToString,
   SimulationStatus,
+  sortsBefore,
   SwapOptions,
   SwapRoute,
 } from '@uniswap/smart-order-router'
-import { Pool } from '@uniswap/v3-sdk'
+import { Pool as V3Pool } from '@uniswap/v3-sdk'
+import { Pool as V4Pool } from '@uniswap/v4-sdk'
 import JSBI from 'jsbi'
 import _ from 'lodash'
 import { APIGLambdaHandler, ErrorResponse, HandleRequestParams, Response } from '../handler'
 import { ContainerInjected, RequestInjected } from '../injector-sor'
-import { QuoteResponse, QuoteResponseSchemaJoi, V2PoolInRoute, V3PoolInRoute } from '../schema'
+import { QuoteResponse, QuoteResponseSchemaJoi, SupportedPoolInRoute } from '../schema'
 import {
   DEFAULT_ROUTING_CONFIG_BY_CHAIN,
   FEE_ON_TRANSFER_SPECIFIC_CONFIG,
@@ -25,7 +28,7 @@ import {
   QUOTE_SPEED_CONFIG,
 } from '../shared'
 import { QuoteQueryParams, QuoteQueryParamsJoi, TradeTypeParam } from './schema/quote-schema'
-import { simulationStatusToString } from './util/simulation'
+import { simulationStatusTranslation } from './util/simulation'
 import Logger from 'bunyan'
 import { PAIRS_TO_TRACK } from './util/pairs-to-track'
 import { measureDistributionPercentChangeImpact } from '../../util/alpha-config-measurement'
@@ -33,7 +36,15 @@ import { MetricsLogger } from 'aws-embedded-metrics'
 import { CurrencyLookup } from '../CurrencyLookup'
 import { SwapOptionsFactory } from './SwapOptionsFactory'
 import { GlobalRpcProviders } from '../../rpc/GlobalRpcProviders'
-import semver from 'semver'
+import { adhocCorrectGasUsed } from '../../util/estimateGasUsed'
+import { adhocCorrectGasUsedUSD } from '../../util/estimateGasUsedUSD'
+import { Pair } from '@uniswap/v2-sdk'
+import { UniversalRouterVersion } from '@uniswap/universal-router-sdk'
+import {
+  convertStringRouterVersionToEnum,
+  protocolVersionsToBeExcludedFromMixed,
+  URVersionsToProtocolVersions,
+} from '../../util/supportedProtocolVersions'
 
 export class QuoteHandler extends APIGLambdaHandler<
   ContainerInjected,
@@ -63,6 +74,7 @@ export class QuoteHandler extends APIGLambdaHandler<
       if (useRpcGateway) {
         const provider = GlobalRpcProviders.getGlobalUniRpcProviders(log).get(chainId)!
         provider.forceAttachToNewSession()
+        provider.shouldEvaluate = true
       }
 
       result = await this.handleRequestInternal(params, startTime)
@@ -124,6 +136,16 @@ export class QuoteHandler extends APIGLambdaHandler<
             1,
             MetricLoggerUnit.Count
           )
+          log.error(
+            {
+              statusCode: result?.statusCode,
+              errorCode: result?.errorCode,
+              detail: result?.detail,
+            },
+            `Quote 5XX Error [${result?.statusCode}] on ${ID_TO_NETWORK_NAME(chainId)} with errorCode '${
+              result?.errorCode
+            }': ${result?.detail}`
+          )
           break
       }
     } catch (err) {
@@ -137,6 +159,8 @@ export class QuoteHandler extends APIGLambdaHandler<
         1,
         MetricLoggerUnit.Count
       )
+
+      log.error(`Quote 5XX Error on ${ID_TO_NETWORK_NAME(chainId)} with exception '${err}'`)
 
       throw err
     } finally {
@@ -219,6 +243,7 @@ export class QuoteHandler extends APIGLambdaHandler<
         chainId,
         tokenProvider,
         tokenListProvider,
+        v4PoolProvider: v4PoolProvider,
         v3PoolProvider: v3PoolProvider,
         v2PoolProvider: v2PoolProvider,
         metric,
@@ -234,6 +259,10 @@ export class QuoteHandler extends APIGLambdaHandler<
 
     const requestSourceHeader = params.event.headers && params.event.headers['x-request-source']
     const appVersion = params.event.headers && params.event.headers['x-app-version']
+    const universalRouterVersion = convertStringRouterVersionToEnum(
+      params.event.headers?.['x-universal-router-version']
+    )
+    const excludedProtocolsFromMixed = protocolVersionsToBeExcludedFromMixed(universalRouterVersion)
 
     if (requestSourceHeader) {
       metric.putMetric(`RequestSource.${requestSourceHeader}`, 1)
@@ -243,12 +272,10 @@ export class QuoteHandler extends APIGLambdaHandler<
       metric.putMetric(`AppVersion.${appVersion}`, 1)
     }
 
-    const requestSource = requestSourceHeader ?? params.requestQueryParams.source ?? ''
     const protocols = QuoteHandler.protocolsFromRequest(
       chainId,
+      universalRouterVersion,
       protocolsStr,
-      requestSource,
-      appVersion,
       forceCrossProtocol
     )
 
@@ -286,7 +313,6 @@ export class QuoteHandler extends APIGLambdaHandler<
       }
     }
 
-    // We need bo wrap both tokens, because the comparison includes comparing native currency vs token.
     if (currencyIn.wrapped.equals(currencyOut.wrapped)) {
       return {
         statusCode: 400,
@@ -314,6 +340,7 @@ export class QuoteHandler extends APIGLambdaHandler<
       // accidentally override usedCachedRoutes in the normal path.
       ...(enableFeeOnTransferFeeFetching ? FEE_ON_TRANSFER_SPECIFIC_CONFIG(enableFeeOnTransferFeeFetching) : {}),
       ...(gasToken ? { gasToken } : {}),
+      ...(excludedProtocolsFromMixed ? { excludedProtocolsFromMixed } : {}),
     }
 
     metric.putMetric(`${intent}Intent`, 1, MetricLoggerUnit.Count)
@@ -328,17 +355,16 @@ export class QuoteHandler extends APIGLambdaHandler<
       tokenPairSymbolChain = `${tokenPairSymbol}/${chainId}`
     }
 
-    const [token0Symbol, token0Address, token1Symbol, token1Address] = currencyIn.wrapped.sortsBefore(
-      currencyOut.wrapped
-    )
-      ? [currencyIn.symbol, currencyIn.wrapped.address, currencyOut.symbol, currencyOut.wrapped.address]
-      : [currencyOut.symbol, currencyOut.wrapped.address, currencyIn.symbol, currencyIn.wrapped.address]
+    const [token0Symbol, token0Address, token1Symbol, token1Address] = sortsBefore(currencyIn, currencyOut)
+      ? [currencyIn.symbol, getAddress(currencyIn), currencyOut.symbol, getAddress(currencyOut)]
+      : [currencyOut.symbol, getAddress(currencyOut), currencyIn.symbol, getAddress(currencyOut)]
 
     const swapParams: SwapOptions | undefined = SwapOptionsFactory.assemble({
       chainId,
       currencyIn,
       currencyOut,
       tradeType: type,
+      universalRouterVersion,
       slippageTolerance,
       enableUniversalRouter,
       portionBips,
@@ -362,6 +388,14 @@ export class QuoteHandler extends APIGLambdaHandler<
     switch (type) {
       case 'exactIn':
         amount = CurrencyAmount.fromRawAmount(currencyIn, JSBI.BigInt(amountRaw))
+
+        if (!amount.greaterThan(CurrencyAmount.fromRawAmount(currencyIn, JSBI.BigInt(0)))) {
+          return {
+            statusCode: 400,
+            errorCode: 'AMOUNT_INVALID',
+            detail: 'Amount must be greater than 0',
+          }
+        }
 
         log.info(
           {
@@ -389,6 +423,14 @@ export class QuoteHandler extends APIGLambdaHandler<
         break
       case 'exactOut':
         amount = CurrencyAmount.fromRawAmount(currencyOut, JSBI.BigInt(amountRaw))
+
+        if (!amount.greaterThan(CurrencyAmount.fromRawAmount(currencyIn, JSBI.BigInt(0)))) {
+          return {
+            statusCode: 400,
+            errorCode: 'AMOUNT_INVALID',
+            detail: 'Amount must be greater than 0',
+          }
+        }
 
         log.info(
           {
@@ -440,17 +482,25 @@ export class QuoteHandler extends APIGLambdaHandler<
       quoteGasAdjusted,
       quoteGasAndPortionAdjusted,
       route,
-      estimatedGasUsed,
+      estimatedGasUsed: preProcessedEstimatedGasUsed,
       estimatedGasUsedQuoteToken,
-      estimatedGasUsedUSD,
+      estimatedGasUsedUSD: preProcessedEstimatedGasUsedUSD,
       estimatedGasUsedGasToken,
       gasPriceWei,
       methodParameters,
       blockNumber,
       simulationStatus,
       hitsCachedRoute,
-      portionAmount: outputPortionAmount, // TODO: name it back to portionAmount
+      portionAmount: outputPortionAmount, // TODO: name it back to portionAmount,
+      trade,
     } = swapRoute
+
+    const estimatedGasUsed = adhocCorrectGasUsed(preProcessedEstimatedGasUsed, chainId)
+    const estimatedGasUsedUSD = adhocCorrectGasUsedUSD(
+      preProcessedEstimatedGasUsed,
+      preProcessedEstimatedGasUsedUSD,
+      chainId
+    )
 
     if (simulationStatus == SimulationStatus.Failed) {
       metric.putMetric('SimulationFailed', 1, MetricLoggerUnit.Count)
@@ -462,15 +512,21 @@ export class QuoteHandler extends APIGLambdaHandler<
       metric.putMetric('SimulationNotApproved', 1, MetricLoggerUnit.Count)
     } else if (simulationStatus == SimulationStatus.NotSupported) {
       metric.putMetric('SimulationNotSupported', 1, MetricLoggerUnit.Count)
+    } else if (simulationStatus == SimulationStatus.SystemDown) {
+      metric.putMetric('SimulationSystemDown', 1, MetricLoggerUnit.Count)
+      metric.putMetric(`SimulationSystemDownChainId${chainId}`, 1, MetricLoggerUnit.Count)
+    } else if (simulationStatus == SimulationStatus.SlippageTooLow) {
+      metric.putMetric('SlippageTooLow', 1, MetricLoggerUnit.Count)
+      metric.putMetric(`SlippageTooLowChainId${chainId}`, 1, MetricLoggerUnit.Count)
     }
 
-    const routeResponse: Array<(V3PoolInRoute | V2PoolInRoute)[]> = []
+    const routeResponse: Array<SupportedPoolInRoute[]> = []
 
     for (const subRoute of route) {
       const { amount, quote, tokenPath } = subRoute
 
       const pools = subRoute.protocol == Protocol.V2 ? subRoute.route.pairs : subRoute.route.pools
-      const curRoute: (V3PoolInRoute | V2PoolInRoute)[] = []
+      const curRoute: SupportedPoolInRoute[] = []
       for (let i = 0; i < pools.length; i++) {
         const nextPool = pools[i]
         const tokenIn = tokenPath[i]
@@ -486,20 +542,51 @@ export class QuoteHandler extends APIGLambdaHandler<
           edgeAmountOut = type == 'exactIn' ? quote.quotient.toString() : amount.quotient.toString()
         }
 
-        if (nextPool instanceof Pool) {
+        if (nextPool instanceof V4Pool) {
+          curRoute.push({
+            type: 'v4-pool',
+            address: v4PoolProvider.getPoolId(
+              nextPool.token0,
+              nextPool.token1,
+              nextPool.fee,
+              nextPool.tickSpacing,
+              nextPool.hooks
+            ).poolId,
+            tokenIn: {
+              chainId: tokenIn.chainId,
+              decimals: tokenIn.decimals.toString(),
+              address: getAddress(tokenIn),
+              symbol: tokenIn.symbol!,
+            },
+            tokenOut: {
+              chainId: tokenOut.chainId,
+              decimals: tokenOut.decimals.toString(),
+              address: getAddress(tokenOut),
+              symbol: tokenOut.symbol!,
+            },
+            fee: nextPool.fee.toString(),
+            tickSpacing: nextPool.tickSpacing.toString(),
+            hooks: nextPool.hooks.toString(),
+            liquidity: nextPool.liquidity.toString(),
+            sqrtRatioX96: nextPool.sqrtRatioX96.toString(),
+            tickCurrent: nextPool.tickCurrent.toString(),
+            amountIn: edgeAmountIn,
+            amountOut: edgeAmountOut,
+          })
+        } else if (nextPool instanceof V3Pool) {
           curRoute.push({
             type: 'v3-pool',
             address: v3PoolProvider.getPoolAddress(nextPool.token0, nextPool.token1, nextPool.fee).poolAddress,
             tokenIn: {
               chainId: tokenIn.chainId,
               decimals: tokenIn.decimals.toString(),
-              address: tokenIn.address,
+              address: tokenIn.wrapped.address,
               symbol: tokenIn.symbol!,
             },
             tokenOut: {
               chainId: tokenOut.chainId,
               decimals: tokenOut.decimals.toString(),
-              address: tokenOut.address,
+              address: tokenOut.wrapped.address,
               symbol: tokenOut.symbol!,
             },
             fee: nextPool.fee.toString(),
@@ -509,7 +596,7 @@ export class QuoteHandler extends APIGLambdaHandler<
             amountIn: edgeAmountIn,
             amountOut: edgeAmountOut,
           })
-        } else {
+        } else if (nextPool instanceof Pair) {
           const reserve0 = nextPool.reserve0
           const reserve1 = nextPool.reserve1
 
@@ -519,7 +606,7 @@ export class QuoteHandler extends APIGLambdaHandler<
             tokenIn: {
               chainId: tokenIn.chainId,
               decimals: tokenIn.decimals.toString(),
-              address: tokenIn.address,
+              address: tokenIn.wrapped.address,
               symbol: tokenIn.symbol!,
               buyFeeBps: this.deriveBuyFeeBps(tokenIn, reserve0, reserve1, enableFeeOnTransferFeeFetching),
               sellFeeBps: this.deriveSellFeeBps(tokenIn, reserve0, reserve1, enableFeeOnTransferFeeFetching),
@@ -527,7 +614,7 @@ export class QuoteHandler extends APIGLambdaHandler<
             tokenOut: {
               chainId: tokenOut.chainId,
               decimals: tokenOut.decimals.toString(),
-              address: tokenOut.address,
+              address: tokenOut.wrapped.address,
               symbol: tokenOut.symbol!,
               buyFeeBps: this.deriveBuyFeeBps(tokenOut, reserve0, reserve1, enableFeeOnTransferFeeFetching),
               sellFeeBps: this.deriveSellFeeBps(tokenOut, reserve0, reserve1, enableFeeOnTransferFeeFetching),
@@ -577,6 +664,8 @@ export class QuoteHandler extends APIGLambdaHandler<
             amountIn: edgeAmountIn,
             amountOut: edgeAmountOut,
           })
+        } else {
+          throw new Error(`Unsupported pool type ${JSON.stringify(nextPool)}`)
         }
       }
 
@@ -602,7 +691,7 @@ export class QuoteHandler extends APIGLambdaHandler<
       gasUseEstimateGasTokenDecimals: estimatedGasUsedGasToken?.toExact(),
       gasUseEstimate: estimatedGasUsed.toString(),
       gasUseEstimateUSD: estimatedGasUsedUSD.toExact(),
-      simulationStatus: simulationStatusToString(simulationStatus, log),
+      simulationStatus: simulationStatusTranslation(simulationStatus, log),
       simulationError: simulationStatus == SimulationStatus.Failed,
       gasPriceWei: gasPriceWei.toString(),
       route: routeResponse,
@@ -613,6 +702,7 @@ export class QuoteHandler extends APIGLambdaHandler<
       portionRecipient: outputPortionAmount && portionRecipient,
       portionAmount: outputPortionAmount?.quotient.toString(),
       portionAmountDecimals: outputPortionAmount?.toExact(),
+      priceImpact: trade?.priceImpact?.toFixed(),
     }
 
     this.logRouteMetrics(
@@ -638,16 +728,11 @@ export class QuoteHandler extends APIGLambdaHandler<
 
   static protocolsFromRequest(
     chainId: ChainId,
-    requestedProtocols: string[] | string | undefined,
-    requestSource: string,
-    appVersion: string | undefined,
-    forceCrossProtocol: boolean | undefined
+    universalRouterVersion: UniversalRouterVersion,
+    requestedProtocols?: string[] | string,
+    forceCrossProtocol?: boolean
   ): Protocol[] | undefined {
-    const isMobileRequest = ['uniswap-ios', 'uniswap-android'].includes(requestSource)
-    // We will exclude V2 if isMobile and the appVersion is not present or is lower than 1.24
-    const semverAppVersion = semver.coerce(appVersion)
-    const fixVersion = semver.coerce('1.24')!
-    const excludeV2 = isMobileRequest && (semverAppVersion === null || semver.lt(semverAppVersion, fixVersion))
+    const excludeV2 = false
 
     if (requestedProtocols) {
       let protocols: Protocol[] = []
@@ -656,11 +741,20 @@ export class QuoteHandler extends APIGLambdaHandler<
         switch (protocolStr.toUpperCase()) {
           case Protocol.V2:
             if (chainId === ChainId.MAINNET || !excludeV2) {
-              protocols.push(Protocol.V2)
+              if (URVersionsToProtocolVersions[universalRouterVersion].includes(Protocol.V2)) {
+                protocols.push(Protocol.V2)
+              }
             }
             break
           case Protocol.V3:
-            protocols.push(Protocol.V3)
+            if (URVersionsToProtocolVersions[universalRouterVersion].includes(Protocol.V3)) {
+              protocols.push(Protocol.V3)
+            }
+            break
+          case Protocol.V4:
+            if (URVersionsToProtocolVersions[universalRouterVersion].includes(Protocol.V4)) {
+              protocols.push(Protocol.V4)
+            }
             break
           case Protocol.MIXED:
             if (chainId === ChainId.MAINNET || !excludeV2) {
@@ -736,9 +830,9 @@ export class QuoteHandler extends APIGLambdaHandler<
     routeString: string,
     swapRoute: SwapRoute
   ): void {
-    const tradingPair = `${currencyIn.wrapped.symbol}/${currencyOut.wrapped.symbol}`
-    const wildcardInPair = `${currencyIn.wrapped.symbol}/*`
-    const wildcardOutPair = `*/${currencyOut.wrapped.symbol}`
+    const tradingPair = `${currencyIn.symbol}/${currencyOut.symbol}`
+    const wildcardInPair = `${currencyIn.symbol}/*`
+    const wildcardOutPair = `*/${currencyOut.symbol}`
     const tradeTypeEnumValue = tradeType == 'exactIn' ? TradeType.EXACT_INPUT : TradeType.EXACT_OUTPUT
     const pairsTracked = PAIRS_TO_TRACK.get(chainId)?.get(tradeTypeEnumValue)
 

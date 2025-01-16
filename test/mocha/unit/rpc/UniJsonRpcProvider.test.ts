@@ -11,6 +11,8 @@ import {
 import { SingleJsonRpcProvider } from '../../../../lib/rpc/SingleJsonRpcProvider'
 import { default as bunyan } from 'bunyan'
 import { ProviderHealthiness } from '../../../../lib/rpc/ProviderHealthState'
+import { JsonRpcResponse } from 'hardhat/types'
+import { EthFeeHistory } from '../../../../lib/util/eth_feeHistory'
 
 const UNI_PROVIDER_TEST_CONFIG: UniJsonRpcProviderConfig = {
   HEALTH_EVALUATION_WAIT_PERIOD_IN_S: 0,
@@ -43,6 +45,7 @@ const createNewSingleJsonRpcProviders = () => [
   new SingleJsonRpcProvider(
     { name: 'mainnet', chainId: ChainId.MAINNET },
     `url_0`,
+    undefined,
     log,
     SINGLE_PROVIDER_TEST_CONFIG,
     false,
@@ -51,6 +54,7 @@ const createNewSingleJsonRpcProviders = () => [
   new SingleJsonRpcProvider(
     { name: 'mainnet', chainId: ChainId.MAINNET },
     `url_1`,
+    undefined,
     log,
     SINGLE_PROVIDER_TEST_CONFIG,
     false,
@@ -59,6 +63,7 @@ const createNewSingleJsonRpcProviders = () => [
   new SingleJsonRpcProvider(
     { name: 'mainnet', chainId: ChainId.MAINNET },
     `url_2`,
+    undefined,
     log,
     SINGLE_PROVIDER_TEST_CONFIG,
     false,
@@ -697,7 +702,7 @@ describe('UniJsonRpcProvider', () => {
     const spy1 = sandbox.spy(uniProvider['providers'][1], 'evaluateLatency')
     const spy2 = sandbox.spy(uniProvider['providers'][2], 'evaluateLatency')
 
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
 
     // Shadow evaluate call should be made
     expect(spy0.callCount).to.equal(0)
@@ -739,7 +744,7 @@ describe('UniJsonRpcProvider', () => {
     const spy1 = sandbox.spy(uniProvider['providers'][1], 'evaluateLatency')
     const spy2 = sandbox.spy(uniProvider['providers'][2], 'evaluateLatency')
 
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
 
     // Shadow evaluate call should be made
     expect(spy0.callCount).to.equal(0)
@@ -757,11 +762,11 @@ describe('UniJsonRpcProvider', () => {
     spy1.resetHistory()
     spy2.resetHistory()
 
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
 
     // 1 second is not long enough to allow another latency evaluation shadow call.
-    expect(spy1.callCount).to.equal(0)
-    expect(spy2.callCount).to.equal(0)
+    expect(spy1.callCount).to.equal(1)
+    expect(spy2.callCount).to.equal(1)
 
     // Advance another 15 seconds.
     sandbox.clock.tick(15000)
@@ -769,7 +774,7 @@ describe('UniJsonRpcProvider', () => {
     spy1.resetHistory()
     spy2.resetHistory()
 
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
 
     expect(spy1.callCount).to.equal(1)
     expect(spy1.getCalls()[0].firstArg).to.equal('getBlockNumber')
@@ -811,17 +816,17 @@ describe('UniJsonRpcProvider', () => {
 
     // Make 5 calls in parallel.
     await Promise.all([
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
     ])
 
     expect(spy0.callCount).to.equal(0)
-    expect(spy1.callCount).to.equal(1)
+    expect(spy1.callCount).to.equal(5)
     expect(spy1.getCalls()[0].firstArg).to.equal('getBlockNumber')
-    expect(spy2.callCount).to.equal(1)
+    expect(spy2.callCount).to.equal(5)
     expect(spy2.getCalls()[0].firstArg).to.equal('getBlockNumber')
 
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp)
@@ -875,17 +880,17 @@ describe('UniJsonRpcProvider', () => {
 
     // Make another 5 calls in parallel.
     await Promise.all([
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
-      uniProvider.getBlockNumber(),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
+      uniProvider.getBlockNumber('sessionId'),
     ])
 
     // Waited long enough to be able to make shadow calls. However, due to the locking mechanism, only 1 call is made to each shadow provider.
     expect(spy0.callCount).to.equal(0)
-    expect(spy1.callCount).to.equal(1)
-    expect(spy2.callCount).to.equal(1)
+    expect(spy1.callCount).to.equal(5)
+    expect(spy2.callCount).to.equal(5)
 
     expect(uniProvider['providers'][1]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
     expect(uniProvider['providers'][2]['lastLatencyEvaluationTimestampInMs']).equals(timestamp + 16000)
@@ -920,7 +925,7 @@ describe('UniJsonRpcProvider', () => {
     const randStub = sandbox.stub(Math, 'random')
 
     randStub.returns(0.6)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.6 >= 0.5, Shadow evaluate call should not be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(0)
@@ -930,7 +935,7 @@ describe('UniJsonRpcProvider', () => {
     spy2.resetHistory()
 
     randStub.returns(0.5)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.5 >= 0.5, Shadow evaluate call should not be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(0)
@@ -940,7 +945,7 @@ describe('UniJsonRpcProvider', () => {
     spy2.resetHistory()
 
     randStub.returns(0.4)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.4 < 0.5, Shadow evaluate call should be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(1)
@@ -981,7 +986,7 @@ describe('UniJsonRpcProvider', () => {
     const randStub = sandbox.stub(Math, 'random')
 
     randStub.returns(0.6)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.6 >= 0.5, Shadow evaluate call should not be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(0)
@@ -991,7 +996,7 @@ describe('UniJsonRpcProvider', () => {
     spy2.resetHistory()
 
     randStub.returns(0.5)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.5 >= 0.5, Shadow evaluate call should not be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(0)
@@ -1001,10 +1006,162 @@ describe('UniJsonRpcProvider', () => {
     spy2.resetHistory()
 
     randStub.returns(0.4)
-    await uniProvider.getBlockNumber()
+    await uniProvider.getBlockNumber('sessionId')
     // 0.4 < 0.5, Shadow evaluate call should be made
     expect(spy0.callCount).to.equal(0)
     expect(spy1.callCount).to.equal(1)
     expect(spy2.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_call with same results', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    uniProvider.compareRpcResponses('0x123', '0x123', selectedProvider, otherProvider, 'call', [])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_call with different results', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMismatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    uniProvider.compareRpcResponses('0x321', '0x123', selectedProvider, otherProvider, 'call', [])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_estimateGas with same results', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const providerResult: JsonRpcResponse = { jsonrpc: '2.0', result: '0x123', id: 76 }
+    const otherProviderResult: JsonRpcResponse = { jsonrpc: '2.0', result: '0x123', id: 76 }
+    uniProvider.compareRpcResponses(providerResult, otherProviderResult, selectedProvider, otherProvider, 'send', [
+      'eth_call',
+    ])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_estimateGas with different results', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMismatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const providerResult: JsonRpcResponse = { jsonrpc: '2.0', result: '0x123', id: 76 }
+    const otherProviderResult: JsonRpcResponse = { jsonrpc: '2.0', result: '0x321', id: 76 }
+    uniProvider.compareRpcResponses(providerResult, otherProviderResult, selectedProvider, otherProvider, 'send', [
+      'eth_call',
+    ])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC error for eth_estimateGas with same errors', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const providerError = { code: '123', data: '0x123', error: 'CALL_EXCEPTION' }
+    const otherProviderError = { code: '123', data: '0x123', error: 'CALL_EXCEPTION' }
+    uniProvider.compareRpcResponses(providerError, otherProviderError, selectedProvider, otherProvider, 'send', [
+      'eth_call',
+    ])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC error for eth_estimateGas with different errors', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const providerError = { code: '123', data: '0x321', error: 'CALL_EXCEPTION' }
+    const otherProviderError = { code: '123', data: '0x123', error: 'CALL_EXCEPTION' }
+    uniProvider.compareRpcResponses(providerError, otherProviderError, selectedProvider, otherProvider, 'send', [
+      'eth_call',
+    ])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_feeHistory with different results, but one is a number and the other is a string', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const ethFeeHistory: EthFeeHistory = {
+      oldestBlock: '0x1347665',
+      reward: ['0x21f43815'],
+      baseFeePerGas: ['0x7750ad57'],
+      gasUsedRatio: [0.4496709],
+      baseFeePerBlobGas: ['0x1'],
+      blobGasUsedRatio: [0.4496709],
+    }
+    const providerResult: JsonRpcResponse = { jsonrpc: '2.0', result: ethFeeHistory, id: 76 }
+    const otherProviderResult: JsonRpcResponse = { jsonrpc: '2.0', result: ethFeeHistory, id: 76 }
+    uniProvider.compareRpcResponses(providerResult, otherProviderResult, selectedProvider, otherProvider, 'send', [
+      'eth_feeHistory',
+    ])
+
+    expect(spy.callCount).to.equal(1)
+  })
+
+  it('Test compare RPC result for eth_feeHistory with different results', async () => {
+    const rpcProviders = createNewSingleJsonRpcProviders()
+    const selectedProvider = rpcProviders[0]
+    const otherProvider = rpcProviders[1]
+    const spy = sandbox.spy(selectedProvider, 'logRpcResponseMismatch')
+
+    uniProvider = new UniJsonRpcProvider(ChainId.MAINNET, rpcProviders, log, UNI_PROVIDER_TEST_CONFIG, 1.0, 1)
+
+    const ethFeeHistory: EthFeeHistory = {
+      oldestBlock: '0x1347665',
+      reward: ['0x21f43815'],
+      baseFeePerGas: ['0x7750ad57'],
+      gasUsedRatio: [0.4496709],
+      baseFeePerBlobGas: ['0x1'],
+      blobGasUsedRatio: [0.4496709],
+    }
+    const ethFeeHistory2: EthFeeHistory = {
+      oldestBlock: '0x1347661',
+      reward: ['0x21f43815'],
+      baseFeePerGas: ['0x7750ad57'],
+      gasUsedRatio: [0.4496709],
+      baseFeePerBlobGas: ['0x1'],
+      blobGasUsedRatio: [0.4496709],
+    }
+    const providerResult: JsonRpcResponse = { jsonrpc: '2.0', result: ethFeeHistory, id: 76 }
+    const otherProviderResult: JsonRpcResponse = { jsonrpc: '2.0', result: ethFeeHistory2, id: 76 }
+    uniProvider.compareRpcResponses(providerResult, otherProviderResult, selectedProvider, otherProvider, 'send', [
+      'eth_feeHistory',
+    ])
+
+    expect(spy.callCount).to.equal(1)
   })
 })

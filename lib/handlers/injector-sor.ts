@@ -3,40 +3,49 @@ import {
   CachingGasStationProvider,
   CachingTokenListProvider,
   CachingTokenProviderWithFallback,
+  CachingV2PoolProvider,
   CachingV3PoolProvider,
+  CachingV4PoolProvider,
   EIP1559GasPriceProvider,
-  FallbackTenderlySimulator,
-  TenderlySimulator,
   EthEstimateGasSimulator,
+  FallbackTenderlySimulator,
+  getApplicableV4FeesTickspacingsHooks,
   IGasPriceProvider,
   IMetric,
-  Simulator,
+  IOnChainQuoteProvider,
+  IRouteCachingProvider,
   ITokenListProvider,
+  ITokenPropertiesProvider,
   ITokenProvider,
   IV2PoolProvider,
   IV2SubgraphProvider,
   IV3PoolProvider,
   IV3SubgraphProvider,
+  IV4PoolProvider,
+  IV4SubgraphProvider,
   LegacyGasPriceProvider,
+  MIXED_ROUTE_QUOTER_V1_ADDRESSES,
+  MIXED_ROUTE_QUOTER_V2_ADDRESSES,
+  NEW_QUOTER_V2_ADDRESSES,
   NodeJSCache,
   OnChainGasPriceProvider,
   OnChainQuoteProvider,
+  PROTOCOL_V4_QUOTER_ADDRESSES,
+  QUOTER_V2_ADDRESSES,
   setGlobalLogger,
+  Simulator,
   StaticV2SubgraphProvider,
   StaticV3SubgraphProvider,
-  TokenProvider,
+  StaticV4SubgraphProvider,
+  TenderlySimulator,
   TokenPropertiesProvider,
+  TokenProvider,
+  TokenValidatorProvider,
   UniswapMulticallProvider,
   V2PoolProvider,
   V2QuoteProvider,
   V3PoolProvider,
-  IRouteCachingProvider,
-  CachingV2PoolProvider,
-  TokenValidatorProvider,
-  ITokenPropertiesProvider,
-  IOnChainQuoteProvider,
-  MIXED_ROUTE_QUOTER_V1_ADDRESSES,
-  NEW_QUOTER_V2_ADDRESSES,
+  V4PoolProvider,
 } from '@uniswap/smart-order-router'
 import { TokenList } from '@uniswap/token-lists'
 import { default as bunyan, default as Logger } from 'bunyan'
@@ -44,7 +53,11 @@ import _ from 'lodash'
 import NodeCache from 'node-cache'
 import UNSUPPORTED_TOKEN_LIST from './../config/unsupported.tokenlist.json'
 import { BaseRInj, Injector } from './handler'
-import { V2AWSSubgraphProvider, V3AWSSubgraphProvider } from './router-entities/aws-subgraph-provider'
+import {
+  V2AWSSubgraphProvider,
+  V3AWSSubgraphProvider,
+  V4AWSSubgraphProvider,
+} from './router-entities/aws-subgraph-provider'
 import { AWSTokenListProvider } from './router-entities/aws-token-list-provider'
 import { DynamoRouteCachingProvider } from './router-entities/route-caching/dynamo-route-caching-provider'
 import { DynamoDBCachingV3PoolProvider } from './pools/pool-caching/v3/dynamo-caching-pool-provider'
@@ -57,15 +70,28 @@ import { OnChainTokenFeeFetcher } from '@uniswap/smart-order-router/build/main/p
 import { PortionProvider } from '@uniswap/smart-order-router/build/main/providers/portion-provider'
 import { GlobalRpcProviders } from '../rpc/GlobalRpcProviders'
 import { StaticJsonRpcProvider } from '@ethersproject/providers'
-import { TrafficSwitchOnChainQuoteProvider } from './quote/provider-migration/v3/traffic-switch-on-chain-quote-provider'
+import { TrafficSwitchOnChainQuoteProvider } from './quote/provider-migration/traffic-switch-on-chain-quote-provider'
 import {
-  BATCH_PARAMS,
   BLOCK_NUMBER_CONFIGS,
   GAS_ERROR_FAILURE_OVERRIDES,
+  NON_OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS,
+  OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS,
   RETRY_OPTIONS,
   SUCCESS_RATE_FAILURE_OVERRIDES,
 } from '../util/onChainQuoteProviderConfigs'
 import { v4 } from 'uuid/index'
+import { chainProtocols } from '../cron/cache-config'
+import { Protocol } from '@uniswap/router-sdk'
+import { UniJsonRpcProvider } from '../rpc/UniJsonRpcProvider'
+import { GraphQLTokenFeeFetcher } from '../graphql/graphql-token-fee-fetcher'
+import { UniGraphQLProvider } from '../graphql/graphql-provider'
+import { TrafficSwitcherITokenFeeFetcher } from '../util/traffic-switch/traffic-switcher-i-token-fee-fetcher'
+import {
+  emptyV4FeeTickSpacingsHookAddresses,
+  EXTRA_V4_FEE_TICK_SPACINGS_HOOK_ADDRESSES,
+} from '../util/extraV4FeeTiersTickSpacingsHookAddresses'
+import { NEW_CACHED_ROUTES_ROLLOUT_PERCENT } from '../util/newCachedRoutesRolloutPercent'
+import { TENDERLY_NEW_ENDPOINT_ROLLOUT_PERCENT } from '../util/tenderlyNewEndpointRolloutPercent'
 
 export const SUPPORTED_CHAINS: ChainId[] = [
   ChainId.MAINNET,
@@ -79,12 +105,19 @@ export const SUPPORTED_CHAINS: ChainId[] = [
   ChainId.AVALANCHE,
   ChainId.BASE,
   ChainId.BLAST,
+  ChainId.ZORA,
+  ChainId.ZKSYNC,
+  ChainId.WORLDCHAIN,
+  ChainId.UNICHAIN_SEPOLIA,
+  ChainId.MONAD_TESTNET,
+  ChainId.BASE_SEPOLIA,
 ]
 const DEFAULT_TOKEN_LIST = 'https://gateway.ipfs.io/ipns/tokens.uniswap.org'
 
 export interface RequestInjected<Router> extends BaseRInj {
   chainId: ChainId
   metric: IMetric
+  v4PoolProvider: IV4PoolProvider
   v3PoolProvider: IV3PoolProvider
   v2PoolProvider: IV2PoolProvider
   tokenProvider: ITokenProvider
@@ -96,12 +129,14 @@ export interface RequestInjected<Router> extends BaseRInj {
 
 export type ContainerDependencies = {
   provider: StaticJsonRpcProvider
+  v4SubgraphProvider: IV4SubgraphProvider
   v3SubgraphProvider: IV3SubgraphProvider
   v2SubgraphProvider: IV2SubgraphProvider
   tokenListProvider: ITokenListProvider
   gasPriceProvider: IGasPriceProvider
   tokenProviderFromTokenList: ITokenProvider
   blockedTokenListProvider: ITokenListProvider
+  v4PoolProvider: IV4PoolProvider
   v3PoolProvider: IV3PoolProvider
   v2PoolProvider: IV2PoolProvider
   tokenProvider: ITokenProvider
@@ -113,6 +148,10 @@ export type ContainerDependencies = {
   tokenValidatorProvider: TokenValidatorProvider
   tokenPropertiesProvider: ITokenPropertiesProvider
   v2Supported: ChainId[]
+  v4Supported?: ChainId[]
+  mixedSupported?: ChainId[]
+  v4PoolParams?: Array<[number, number, string]>
+  cachedRoutesCacheInvalidationFixRolloutPercentage?: number
 }
 
 export interface ContainerInjected {
@@ -140,14 +179,15 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
 
     try {
       const {
-        POOL_CACHE_BUCKET_2,
-        POOL_CACHE_KEY,
+        POOL_CACHE_BUCKET_3,
+        POOL_CACHE_GZIP_KEY,
         TOKEN_LIST_CACHE_BUCKET,
         ROUTES_TABLE_NAME,
         ROUTES_CACHING_REQUEST_FLAG_TABLE_NAME,
         CACHED_ROUTES_TABLE_NAME,
         AWS_LAMBDA_FUNCTION_NAME,
         V2_PAIRS_CACHE_TABLE_NAME,
+        CACHING_ROUTING_LAMBDA_FUNCTION_NAME,
       } = process.env
 
       const dependenciesByChain: {
@@ -186,6 +226,7 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
           if (GlobalRpcProviders.getGlobalUniRpcProviders(log).has(chainId)) {
             // Use RPC gateway.
             provider = GlobalRpcProviders.getGlobalUniRpcProviders(log).get(chainId)!
+            ;(provider as UniJsonRpcProvider).shouldEvaluate = false
           } else {
             provider = new DefaultEVMClient({
               allProviders: [
@@ -205,6 +246,15 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
           const blockedTokenCache = new NodeJSCache<Token>(new NodeCache({ stdTTL: 3600, useClones: false }))
           const multicall2Provider = new UniswapMulticallProvider(chainId, provider, 375_000)
 
+          // We didn't switch caching from in-memory to dynamo for V3, and we haven't seen perf degradation
+          // We switched caching from in-memory to dynamo for V2, and we haven't seen perf improvement
+          // V2 has a lot more pools than V3, so for V4 we don't need to pre-emptively switch to dynamo
+          const v4PoolProvider = new CachingV4PoolProvider(
+            chainId,
+            new V4PoolProvider(chainId, multicall2Provider),
+            new NodeJSCache(new NodeCache({ stdTTL: 180, useClones: false }))
+          )
+
           const noCacheV3PoolProvider = new V3PoolProvider(chainId, multicall2Provider)
           const inMemoryCachingV3PoolProvider = new CachingV3PoolProvider(
             chainId,
@@ -223,7 +273,23 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             sourceOfTruthPoolProvider: noCacheV3PoolProvider,
           })
 
-          const tokenFeeFetcher = new OnChainTokenFeeFetcher(chainId, provider)
+          const onChainTokenFeeFetcher = new OnChainTokenFeeFetcher(chainId, provider)
+          const graphQLTokenFeeFetcher = new GraphQLTokenFeeFetcher(
+            new UniGraphQLProvider(),
+            onChainTokenFeeFetcher,
+            chainId
+          )
+          const trafficSwitcherTokenFetcher = new TrafficSwitcherITokenFeeFetcher('TokenFetcherExperimentV2', {
+            control: graphQLTokenFeeFetcher,
+            treatment: onChainTokenFeeFetcher,
+            aliasControl: 'graphQLTokenFeeFetcher',
+            aliasTreatment: 'onChainTokenFeeFetcher',
+            customization: {
+              pctEnabled: 0.0,
+              pctShadowSampling: 0.005,
+            },
+          })
+
           const tokenValidatorProvider = new TokenValidatorProvider(
             chainId,
             multicall2Provider,
@@ -232,7 +298,7 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
           const tokenPropertiesProvider = new TokenPropertiesProvider(
             chainId,
             new NodeJSCache(new NodeCache({ stdTTL: 30000, useClones: false })),
-            tokenFeeFetcher
+            trafficSwitcherTokenFetcher
           )
           const underlyingV2PoolProvider = new V2PoolProvider(chainId, multicall2Provider, tokenPropertiesProvider)
           const v2PoolProvider = new CachingV2PoolProvider(
@@ -240,37 +306,42 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             underlyingV2PoolProvider,
             new V2DynamoCache(V2_PAIRS_CACHE_TABLE_NAME!)
           )
+          const v4PoolParams = getApplicableV4FeesTickspacingsHooks(chainId).concat(
+            EXTRA_V4_FEE_TICK_SPACINGS_HOOK_ADDRESSES[chainId] ?? emptyV4FeeTickSpacingsHookAddresses
+          )
 
-          const [tokenListProvider, blockedTokenListProvider, v3SubgraphProvider, v2SubgraphProvider] =
-            await Promise.all([
-              AWSTokenListProvider.fromTokenListS3Bucket(chainId, TOKEN_LIST_CACHE_BUCKET!, DEFAULT_TOKEN_LIST),
-              CachingTokenListProvider.fromTokenList(chainId, UNSUPPORTED_TOKEN_LIST as TokenList, blockedTokenCache),
-              (async () => {
-                try {
-                  const subgraphProvider = await V3AWSSubgraphProvider.EagerBuild(
-                    POOL_CACHE_BUCKET_2!,
-                    POOL_CACHE_KEY!,
-                    chainId
-                  )
-                  return subgraphProvider
-                } catch (err) {
-                  log.error({ err }, 'AWS Subgraph Provider unavailable, defaulting to Static Subgraph Provider')
-                  return new StaticV3SubgraphProvider(chainId, v3PoolProvider)
-                }
-              })(),
-              (async () => {
-                try {
-                  const subgraphProvider = await V2AWSSubgraphProvider.EagerBuild(
-                    POOL_CACHE_BUCKET_2!,
-                    POOL_CACHE_KEY!,
-                    chainId
-                  )
-                  return subgraphProvider
-                } catch (err) {
-                  return new StaticV2SubgraphProvider(chainId)
-                }
-              })(),
-            ])
+          const [
+            tokenListProvider,
+            blockedTokenListProvider,
+            v4SubgraphProvider,
+            v3SubgraphProvider,
+            v2SubgraphProvider,
+          ] = await Promise.all([
+            AWSTokenListProvider.fromTokenListS3Bucket(chainId, TOKEN_LIST_CACHE_BUCKET!, DEFAULT_TOKEN_LIST),
+            CachingTokenListProvider.fromTokenList(chainId, UNSUPPORTED_TOKEN_LIST as TokenList, blockedTokenCache),
+            (await this.instantiateSubgraphProvider(
+              chainId,
+              Protocol.V4,
+              POOL_CACHE_BUCKET_3!,
+              POOL_CACHE_GZIP_KEY!,
+              v4PoolProvider,
+              v4PoolParams
+            )) as V4AWSSubgraphProvider,
+            (await this.instantiateSubgraphProvider(
+              chainId,
+              Protocol.V3,
+              POOL_CACHE_BUCKET_3!,
+              POOL_CACHE_GZIP_KEY!,
+              v3PoolProvider
+            )) as V3AWSSubgraphProvider,
+            (await this.instantiateSubgraphProvider(
+              chainId,
+              Protocol.V2,
+              POOL_CACHE_BUCKET_3!,
+              POOL_CACHE_GZIP_KEY!,
+              v2PoolProvider
+            )) as V2AWSSubgraphProvider,
+          ])
 
           const tokenProvider = new CachingTokenProviderWithFallback(
             chainId,
@@ -294,29 +365,69 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             case ChainId.CELO:
             case ChainId.AVALANCHE:
             case ChainId.BLAST:
+            case ChainId.ZORA:
+            case ChainId.ZKSYNC:
+            case ChainId.WORLDCHAIN:
+            case ChainId.UNICHAIN_SEPOLIA:
+            case ChainId.MONAD_TESTNET:
+            case ChainId.BASE_SEPOLIA:
               const currentQuoteProvider = new OnChainQuoteProvider(
                 chainId,
                 provider,
                 multicall2Provider,
                 RETRY_OPTIONS[chainId],
-                BATCH_PARAMS[chainId],
-                GAS_ERROR_FAILURE_OVERRIDES[chainId],
-                SUCCESS_RATE_FAILURE_OVERRIDES[chainId],
-                BLOCK_NUMBER_CONFIGS[chainId]
+                (optimisticCachedRoutes, protocol) => {
+                  return optimisticCachedRoutes
+                    ? OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS[protocol][chainId]
+                    : NON_OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS[protocol][chainId]
+                },
+                // nice to have protocol level gas error failure overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => GAS_ERROR_FAILURE_OVERRIDES[chainId],
+                // nice to have protocol level success rate failure overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => SUCCESS_RATE_FAILURE_OVERRIDES[chainId],
+                // nice to have protocol level block number configs overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => BLOCK_NUMBER_CONFIGS[chainId],
+                // We will only enable shadow sample mixed quoter on Base
+                (useMixedRouteQuoter: boolean, mixedRouteContainsV4Pool: boolean, protocol: Protocol) =>
+                  useMixedRouteQuoter
+                    ? mixedRouteContainsV4Pool
+                      ? MIXED_ROUTE_QUOTER_V2_ADDRESSES[chainId]
+                      : MIXED_ROUTE_QUOTER_V1_ADDRESSES[chainId]
+                    : protocol === Protocol.V3
+                    ? QUOTER_V2_ADDRESSES[chainId]
+                    : PROTOCOL_V4_QUOTER_ADDRESSES[chainId]
               )
               const targetQuoteProvider = new OnChainQuoteProvider(
                 chainId,
                 provider,
                 multicall2Provider,
                 RETRY_OPTIONS[chainId],
-                BATCH_PARAMS[chainId],
-                GAS_ERROR_FAILURE_OVERRIDES[chainId],
-                SUCCESS_RATE_FAILURE_OVERRIDES[chainId],
-                BLOCK_NUMBER_CONFIGS[chainId],
-                (useMixedRouteQuoter: boolean) =>
-                  useMixedRouteQuoter ? MIXED_ROUTE_QUOTER_V1_ADDRESSES[chainId] : NEW_QUOTER_V2_ADDRESSES[chainId],
-                (chainId: ChainId, useMixedRouteQuoter: boolean) =>
-                  useMixedRouteQuoter ? `ChainId_${chainId}_ShadowMixedQuoter` : `ChainId_${chainId}_ShadowV3Quoter`
+                (optimisticCachedRoutes, useMixedRouteQuoter) => {
+                  const protocol = useMixedRouteQuoter ? Protocol.MIXED : Protocol.V3
+                  return optimisticCachedRoutes
+                    ? OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS[protocol][chainId]
+                    : NON_OPTIMISTIC_CACHED_ROUTES_BATCH_PARAMS[protocol][chainId]
+                },
+                // nice to have protocol level gas error failure overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => GAS_ERROR_FAILURE_OVERRIDES[chainId],
+                // nice to have protocol level success rate failure overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => SUCCESS_RATE_FAILURE_OVERRIDES[chainId],
+                // nice to have protocol level block number configs overrides, this is in prep for v4 and mixed w/ v4
+                (_protocol) => BLOCK_NUMBER_CONFIGS[chainId],
+                (useMixedRouteQuoter: boolean, mixedRouteContainsV4Pool: boolean, protocol: Protocol) =>
+                  useMixedRouteQuoter
+                    ? mixedRouteContainsV4Pool
+                      ? MIXED_ROUTE_QUOTER_V2_ADDRESSES[chainId]
+                      : MIXED_ROUTE_QUOTER_V1_ADDRESSES[chainId] ??
+                        // besides mainnet, only base has mixed quoter v1 deployed
+                        (chainId === ChainId.BASE ? '0xe544efae946f0008ae9a8d64493efa7886b73776' : undefined)
+                    : protocol === Protocol.V3
+                    ? NEW_QUOTER_V2_ADDRESSES[chainId]
+                    : PROTOCOL_V4_QUOTER_ADDRESSES[chainId],
+                (chainId: ChainId, useMixedRouteQuoter: boolean, optimisticCachedRoutes: boolean) =>
+                  useMixedRouteQuoter
+                    ? `ChainId_${chainId}_ShadowMixedQuoter_OptimisticCachedRoutes${optimisticCachedRoutes}_`
+                    : `ChainId_${chainId}_ShadowV3Quoter_OptimisticCachedRoutes${optimisticCachedRoutes}_`
               )
               quoteProvider = new TrafficSwitchOnChainQuoteProvider({
                 currentQuoteProvider: currentQuoteProvider,
@@ -333,13 +444,26 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             process.env.TENDERLY_USER!,
             process.env.TENDERLY_PROJECT!,
             process.env.TENDERLY_ACCESS_KEY!,
+            process.env.TENDERLY_NODE_API_KEY!,
             v2PoolProvider,
             v3PoolProvider,
+            v4PoolProvider,
             provider,
             portionProvider,
             undefined,
             // The timeout for the underlying axios call to Tenderly, measured in milliseconds.
-            2.5 * 1000
+            2.5 * 1000,
+            TENDERLY_NEW_ENDPOINT_ROLLOUT_PERCENT[chainId],
+            [
+              ChainId.MAINNET,
+              ChainId.BASE,
+              ChainId.ARBITRUM_ONE,
+              ChainId.OPTIMISM,
+              ChainId.POLYGON,
+              ChainId.AVALANCHE,
+              ChainId.BLAST,
+              ChainId.WORLDCHAIN,
+            ]
           )
 
           const ethEstimateGasSimulator = new EthEstimateGasSimulator(
@@ -347,6 +471,7 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             provider,
             v2PoolProvider,
             v3PoolProvider,
+            v4PoolProvider,
             portionProvider
           )
 
@@ -357,13 +482,22 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             tenderlySimulator,
             ethEstimateGasSimulator
           )
+          const newCachedRoutesRolloutPercent = NEW_CACHED_ROUTES_ROLLOUT_PERCENT[chainId]
 
           let routeCachingProvider: IRouteCachingProvider | undefined = undefined
+
+          // if the newCachedRoutesRolloutPercent is greater than the random number, use the new caching routing lambda function name,
+          // so that the caching intent quote handler will invoke the even to the newly created caching routing lambda
+          const cachingQuoteLambdaName =
+            Math.random() * 100 < (newCachedRoutesRolloutPercent ?? 0)
+              ? CACHING_ROUTING_LAMBDA_FUNCTION_NAME
+              : AWS_LAMBDA_FUNCTION_NAME!
+
           if (CACHED_ROUTES_TABLE_NAME && CACHED_ROUTES_TABLE_NAME !== '') {
             routeCachingProvider = new DynamoRouteCachingProvider({
               routesTableName: ROUTES_TABLE_NAME!,
               routesCachingRequestFlagTableName: ROUTES_CACHING_REQUEST_FLAG_TABLE_NAME!,
-              cachingQuoteLambdaName: AWS_LAMBDA_FUNCTION_NAME!,
+              cachingQuoteLambdaName: cachingQuoteLambdaName,
             })
           }
 
@@ -376,7 +510,15 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
             ChainId.BNB,
             ChainId.AVALANCHE,
             ChainId.BLAST,
+            ChainId.WORLDCHAIN,
+            ChainId.MONAD_TESTNET,
           ]
+
+          const v4Supported = [ChainId.SEPOLIA]
+
+          const mixedSupported = [ChainId.MAINNET, ChainId.SEPOLIA, ChainId.GOERLI]
+
+          const cachedRoutesCacheInvalidationFixRolloutPercentage = NEW_CACHED_ROUTES_ROLLOUT_PERCENT[chainId]
 
           return {
             chainId,
@@ -396,8 +538,10 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
                 ),
                 new NodeJSCache(new NodeCache({ stdTTL: 15, useClones: false }))
               ),
+              v4SubgraphProvider,
               v3SubgraphProvider,
               onChainQuoteProvider: quoteProvider,
+              v4PoolProvider,
               v3PoolProvider,
               v2PoolProvider,
               v2QuoteProvider: new V2QuoteProvider(),
@@ -407,6 +551,10 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
               tokenValidatorProvider,
               tokenPropertiesProvider,
               v2Supported,
+              v4Supported,
+              mixedSupported,
+              v4PoolParams,
+              cachedRoutesCacheInvalidationFixRolloutPercentage,
             },
           }
         })
@@ -423,6 +571,47 @@ export abstract class InjectorSOR<Router, QueryParams> extends Injector<
     } catch (err) {
       log.fatal({ err }, `Fatal: Failed to build container`)
       throw err
+    }
+  }
+
+  private async instantiateSubgraphProvider(
+    chainId: ChainId,
+    protocol: Protocol,
+    poolCacheBucket: string,
+    poolCacheKey: string,
+    poolProvider: IV2PoolProvider | IV3PoolProvider | IV4PoolProvider,
+    v4PoolsParams?: Array<[number, number, string]>
+  ) {
+    try {
+      const chainProtocol = chainProtocols.find(
+        (chainProtocol) => chainProtocol.chainId === chainId && chainProtocol.protocol === protocol
+      )
+
+      if (!chainProtocol) {
+        throw new Error(`Chain protocol not found for chain ${chainId} and protocol ${protocol}`)
+      }
+
+      switch (protocol) {
+        case Protocol.V4:
+          return await V4AWSSubgraphProvider.EagerBuild(poolCacheBucket!, poolCacheKey!, chainId)
+        case Protocol.V3:
+          return await V3AWSSubgraphProvider.EagerBuild(poolCacheBucket!, poolCacheKey!, chainId)
+        case Protocol.V2:
+          return await V2AWSSubgraphProvider.EagerBuild(poolCacheBucket!, poolCacheKey!, chainId)
+        default:
+          throw new Error(`Unsupported protocol ${protocol} for chain ${chainId} to instantiate subgraph provider`)
+      }
+    } catch (err) {
+      switch (protocol) {
+        case Protocol.V4:
+          return new StaticV4SubgraphProvider(chainId, poolProvider as IV4PoolProvider, v4PoolsParams)
+        case Protocol.V3:
+          return new StaticV3SubgraphProvider(chainId, poolProvider as IV3PoolProvider)
+        case Protocol.V2:
+          return new StaticV2SubgraphProvider(chainId)
+        default:
+          throw new Error(`Unsupported protocol ${protocol} for chain ${chainId} to instantiate subgraph provider`)
+      }
     }
   }
 }

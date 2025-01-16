@@ -35,7 +35,12 @@ export class RoutingAPIStage extends Stage {
       tenderlyUser: string
       tenderlyProject: string
       tenderlyAccessKey: string
+      tenderlyNodeApiKey: string
       unicornSecret: string
+      alchemyQueryKey?: string
+      decentralizedNetworkApiKey?: string
+      uniGraphQLEndpoint: string
+      uniGraphQLHeaderOrigin: string
     }
   ) {
     super(scope, id, props)
@@ -53,7 +58,12 @@ export class RoutingAPIStage extends Stage {
       tenderlyUser,
       tenderlyProject,
       tenderlyAccessKey,
+      tenderlyNodeApiKey,
       unicornSecret,
+      alchemyQueryKey,
+      decentralizedNetworkApiKey,
+      uniGraphQLEndpoint,
+      uniGraphQLHeaderOrigin,
     } = props
 
     const { url } = new RoutingAPIStack(this, 'RoutingAPI', {
@@ -70,7 +80,12 @@ export class RoutingAPIStage extends Stage {
       tenderlyUser,
       tenderlyProject,
       tenderlyAccessKey,
+      tenderlyNodeApiKey,
       unicornSecret,
+      alchemyQueryKey,
+      decentralizedNetworkApiKey,
+      uniGraphQLEndpoint,
+      uniGraphQLHeaderOrigin,
     })
     this.url = url
   }
@@ -159,56 +174,76 @@ export class RoutingAPIPipeline extends Stack {
       secretCompleteArn: 'arn:aws:secretsmanager:us-east-2:644039819003:secret:routing-api-internal-api-key-Z68NmB',
     })
 
+    const routingApiNewSecrets = sm.Secret.fromSecretAttributes(this, 'RoutingApiNewSecrets', {
+      secretCompleteArn: 'arn:aws:secretsmanager:us-east-2:644039819003:secret:RoutingApiNewSecrets-7EijpM',
+    })
+
     // Load RPC provider URLs from AWS secret
     let jsonRpcProviders = {} as { [chainId: string]: string }
     SUPPORTED_CHAINS.forEach((chainId: ChainId) => {
-      const key = `WEB3_RPC_${chainId}`
-      jsonRpcProviders[key] = jsonRpcProvidersSecret.secretValueFromJson(key).toString()
-      new CfnOutput(this, key, {
-        value: jsonRpcProviders[key],
-      })
+      // Exclude newly introduced chains here. This section can be probably removed but needs to be tested.
+      if (
+        chainId !== ChainId.WORLDCHAIN &&
+        chainId !== ChainId.UNICHAIN_SEPOLIA &&
+        chainId !== ChainId.MONAD_TESTNET &&
+        chainId !== ChainId.BASE_SEPOLIA
+      ) {
+        const key = `WEB3_RPC_${chainId}`
+        jsonRpcProviders[key] = jsonRpcProvidersSecret.secretValueFromJson(key).toString()
+        new CfnOutput(this, key, {
+          value: jsonRpcProviders[key],
+        })
+      }
     })
 
     // Load RPC provider URLs from AWS secret (for RPC Gateway)
     const RPC_GATEWAY_PROVIDERS = [
       // Optimism
-      'INFURA_10',
+      // 'INFURA_10',
       'QUICKNODE_10',
       'ALCHEMY_10',
       // Polygon
       'QUICKNODE_137',
-      'INFURA_137',
+      // 'INFURA_137',
       'ALCHEMY_137',
       // Celo
       'QUICKNODE_42220',
-      'INFURA_42220',
+      // 'INFURA_42220',
       // Avalanche
-      'INFURA_43114',
+      // 'INFURA_43114',
       'QUICKNODE_43114',
-      'NIRVANA_43114',
       // BNB
       'QUICKNODE_56',
       // Base
       'QUICKNODE_8453',
-      'INFURA_8453',
+      // 'INFURA_8453',
       'ALCHEMY_8453',
-      'NIRVANA_8453',
       // Sepolia
-      'INFURA_11155111',
+      // 'INFURA_11155111',
       'ALCHEMY_11155111',
       // Arbitrum
-      'INFURA_42161',
+      // 'INFURA_42161',
       'QUICKNODE_42161',
-      'NIRVANA_42161',
       'ALCHEMY_42161',
       // Ethereum
-      'INFURA_1',
+      // 'INFURA_1',
       'QUICKNODE_1',
-      'NIRVANA_1',
       'ALCHEMY_1',
+      'QUICKNODERETH_1',
       // Blast
       'QUICKNODE_81457',
-      'INFURA_81457',
+      // 'INFURA_81457',
+      // ZORA
+      'QUICKNODE_7777777',
+      // ZkSync
+      'QUICKNODE_324',
+      'ALCHEMY_324',
+      // WorldChain,
+      'QUICKNODE_480',
+      // Unichain Sepolia,
+      'QUICKNODE_1301',
+      // unirpc - serves all chains
+      'UNIRPC_0',
     ]
     for (const provider of RPC_GATEWAY_PROVIDERS) {
       jsonRpcProviders[provider] = jsonRpcProvidersSecret.secretValueFromJson(provider).toString()
@@ -222,7 +257,7 @@ export class RoutingAPIPipeline extends Stack {
       env: { account: '145079444317', region: 'us-east-2' },
       jsonRpcProviders: jsonRpcProviders,
       internalApiKey: internalApiKey.secretValue.toString(),
-      provisionedConcurrency: 10,
+      provisionedConcurrency: 1,
       ethGasStationInfoUrl: ethGasStationInfoUrl.secretValue.toString(),
       stage: STAGE.BETA,
       route53Arn: route53Arn.secretValueFromJson('arn').toString(),
@@ -232,7 +267,12 @@ export class RoutingAPIPipeline extends Stack {
       tenderlyUser: tenderlyCreds.secretValueFromJson('tenderly-user').toString(),
       tenderlyProject: tenderlyCreds.secretValueFromJson('tenderly-project').toString(),
       tenderlyAccessKey: tenderlyCreds.secretValueFromJson('tenderly-access-key').toString(),
+      tenderlyNodeApiKey: tenderlyCreds.secretValueFromJson('tenderly-node-api-key').toString(),
       unicornSecret: unicornSecrets.secretValueFromJson('debug-config-unicorn-key').toString(),
+      alchemyQueryKey: routingApiNewSecrets.secretValueFromJson('alchemy-query-key').toString(),
+      decentralizedNetworkApiKey: routingApiNewSecrets.secretValueFromJson('decentralized-network-api-key').toString(),
+      uniGraphQLEndpoint: routingApiNewSecrets.secretValueFromJson('uni-graphql-endpoint').toString(),
+      uniGraphQLHeaderOrigin: routingApiNewSecrets.secretValueFromJson('uni-graphql-header-origin').toString(),
     })
 
     const betaUsEast2AppStage = pipeline.addStage(betaUsEast2Stage)
@@ -255,7 +295,12 @@ export class RoutingAPIPipeline extends Stack {
       tenderlyUser: tenderlyCreds.secretValueFromJson('tenderly-user').toString(),
       tenderlyProject: tenderlyCreds.secretValueFromJson('tenderly-project').toString(),
       tenderlyAccessKey: tenderlyCreds.secretValueFromJson('tenderly-access-key').toString(),
+      tenderlyNodeApiKey: tenderlyCreds.secretValueFromJson('tenderly-node-api-key').toString(),
       unicornSecret: unicornSecrets.secretValueFromJson('debug-config-unicorn-key').toString(),
+      alchemyQueryKey: routingApiNewSecrets.secretValueFromJson('alchemy-query-key').toString(),
+      decentralizedNetworkApiKey: routingApiNewSecrets.secretValueFromJson('decentralized-network-api-key').toString(),
+      uniGraphQLEndpoint: routingApiNewSecrets.secretValueFromJson('uni-graphql-endpoint').toString(),
+      uniGraphQLHeaderOrigin: routingApiNewSecrets.secretValueFromJson('uni-graphql-header-origin').toString(),
     })
 
     const prodUsEast2AppStage = pipeline.addStage(prodUsEast2Stage)
@@ -303,7 +348,7 @@ export class RoutingAPIPipeline extends Stack {
         'echo "ARCHIVE_NODE_RPC=${ARCHIVE_NODE_RPC}" >> .env',
         'npm install',
         'npm run build',
-        'npm run test:e2e',
+        'set NODE_OPTIONS=--max-old-space-size=4096 && npm run test:e2e',
       ],
     })
 
@@ -327,45 +372,54 @@ const jsonRpcProviders = {
   WEB3_RPC_43114: process.env.WEB3_RPC_43114!,
   WEB3_RPC_56: process.env.WEB3_RPC_56!,
   WEB3_RPC_8453: process.env.WEB3_RPC_8453!,
+  WEB3_RPC_324: process.env.WEB3_RPC_324!,
   // The followings are for RPC Gateway
   // Optimism
-  INFURA_10: process.env.INFURA_10!,
+  // INFURA_10: process.env.INFURA_10!,
   QUICKNODE_10: process.env.QUICKNODE_10!,
   ALCHEMY_10: process.env.ALCHEMY_10!,
   // Polygon
   QUICKNODE_137: process.env.QUICKNODE_137!,
-  INFURA_137: process.env.INFURA_137!,
+  // INFURA_137: process.env.INFURA_137!,
   ALCHEMY_137: process.env.ALCHEMY_137!,
   // Celo
   QUICKNODE_42220: process.env.QUICKNODE_42220!,
-  INFURA_42220: process.env.INFURA_42220!,
+  // INFURA_42220: process.env.INFURA_42220!,
   // Avalanche
-  INFURA_43114: process.env.INFURA_43114!,
+  // INFURA_43114: process.env.INFURA_43114!,
   QUICKNODE_43114: process.env.QUICKNODE_43114!,
-  NIRVANA_43114: process.env.NIRVANA_43114!,
   // BNB
   QUICKNODE_56: process.env.QUICKNODE_56!,
   // Base
   QUICKNODE_8453: process.env.QUICKNODE_8453!,
-  INFURA_8453: process.env.INFURA_8453!,
+  // INFURA_8453: process.env.INFURA_8453!,
   ALCHEMY_8453: process.env.ALCHEMY_8453!,
-  NIRVANA_8453: process.env.NIRVANA_8453!,
   // Sepolia
-  INFURA_11155111: process.env.INFURA_11155111!,
+  // INFURA_11155111: process.env.INFURA_11155111!,
   ALCHEMY_11155111: process.env.ALCHEMY_11155111!,
   // Arbitrum
-  INFURA_42161: process.env.INFURA_42161!,
+  // INFURA_42161: process.env.INFURA_42161!,
   QUICKNODE_42161: process.env.QUICKNODE_42161!,
-  NIRVANA_42161: process.env.NIRVANA_42161!,
   ALCHEMY_42161: process.env.ALCHEMY_42161!,
   // Ethereum
-  INFURA_1: process.env.INFURA_1!,
+  // INFURA_1: process.env.INFURA_1!,
   QUICKNODE_1: process.env.QUICKNODE_1!,
-  NIRVANA_1: process.env.NIRVANA_1!,
+  QUICKNODERETH_1: process.env.QUICKNODERETH_1!,
   ALCHEMY_1: process.env.ALCHEMY_1!,
   // Blast
   QUICKNODE_81457: process.env.QUICKNODE_81457!,
-  INFURA_81457: process.env.INFURA_81457!,
+  // INFURA_81457: process.env.INFURA_81457!,
+  // Zora
+  QUICKNODE_7777777: process.env.QUICKNODE_7777777!,
+  // ZkSync
+  QUICKNODE_324: process.env.QUICKNODE_324!,
+  ALCHEMY_324: process.env.ALCHEMY_324!,
+  // WorldChain,
+  QUICKNODE_480: process.env.QUICKNODE_480!,
+  // Unichain Sepolia,
+  QUICKNODE_1301: process.env.QUICKNODE_1301!,
+  // unirpc - serves all chains
+  UNIRPC_0: process.env.UNIRPC_0!,
 }
 
 // Local dev stack
@@ -384,7 +438,10 @@ new RoutingAPIStack(app, 'RoutingAPIStack', {
   tenderlyUser: process.env.TENDERLY_USER!,
   tenderlyProject: process.env.TENDERLY_PROJECT!,
   tenderlyAccessKey: process.env.TENDERLY_ACCESS_KEY!,
+  tenderlyNodeApiKey: process.env.TENDERLY_NODE_API_KEY!,
   unicornSecret: process.env.UNICORN_SECRET!,
+  uniGraphQLEndpoint: process.env.GQL_URL!,
+  uniGraphQLHeaderOrigin: process.env.GQL_H_ORGN!,
 })
 
 new RoutingAPIPipeline(app, 'RoutingAPIPipelineStack', {

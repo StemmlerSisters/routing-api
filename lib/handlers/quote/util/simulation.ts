@@ -1,22 +1,41 @@
 import { SimulationStatus } from '@uniswap/smart-order-router'
 import Logger from 'bunyan'
 
-export const simulationStatusToString = (simulationStatus: SimulationStatus | undefined, log: Logger) => {
+export enum RoutingApiSimulationStatus {
+  UNATTEMPTED = 'UNATTEMPTED',
+  SUCCESS = 'SUCCESS',
+  FAILED = 'FAILED',
+  INSUFFICIENT_BALANCE = 'INSUFFICIENT_BALANCE',
+  NOT_SUPPORTED = 'NOT_SUPPORTED',
+  NOT_APPROVED = 'NOT_APPROVED',
+  SYSTEM_DOWN = 'SYSTEM_DOWN',
+  SLIPPAGE_TOO_LOW = 'SLIPPAGE_TOO_LOW',
+  UNKNOWN = '',
+}
+
+export const simulationStatusTranslation = (
+  simulationStatus: SimulationStatus | undefined,
+  log: Logger
+): RoutingApiSimulationStatus => {
   switch (simulationStatus) {
     case undefined:
-      return 'UNATTEMPTED'
+      return RoutingApiSimulationStatus.UNATTEMPTED
     case SimulationStatus.Succeeded:
-      return 'SUCCESS'
+      return RoutingApiSimulationStatus.SUCCESS
     case SimulationStatus.Failed:
-      return 'FAILED'
+      return RoutingApiSimulationStatus.FAILED
     case SimulationStatus.InsufficientBalance:
-      return 'INSUFFICIENT_BALANCE'
+      return RoutingApiSimulationStatus.INSUFFICIENT_BALANCE
     case SimulationStatus.NotSupported:
-      return 'NOT_SUPPORTED'
+      return RoutingApiSimulationStatus.NOT_SUPPORTED
     case SimulationStatus.NotApproved:
-      return 'NOT_APPROVED'
+      return RoutingApiSimulationStatus.NOT_APPROVED
+    case SimulationStatus.SystemDown:
+      return RoutingApiSimulationStatus.SYSTEM_DOWN
+    case SimulationStatus.SlippageTooLow:
+      return RoutingApiSimulationStatus.SLIPPAGE_TOO_LOW
     default:
       log.error(`Unknown simulation status ${simulationStatus}`)
-      return ''
+      return RoutingApiSimulationStatus.UNKNOWN
   }
 }

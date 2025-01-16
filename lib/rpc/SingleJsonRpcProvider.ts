@@ -16,12 +16,13 @@ import Logger from 'bunyan'
 import { Network } from '@ethersproject/networks'
 import { getProviderId } from './utils'
 import { ProviderHealthiness } from './ProviderHealthState'
-import { ProviderHealthStateRepository } from './ProviderHealthStateRepository'
-import { ProviderHealthStateDynamoDbRepository } from './ProviderHealthStateDynamoDbRepository'
 
-export const MAJOR_METHOD_NAMES: string[] = ['getBlockNumber', 'call', 'send']
+export const GET_BLOCK_NUMBER_METHOD_NAME = 'getBlockNumber'
+export const CALL_METHOD_NAME = 'call'
+export const SEND_METHOD_NAME = 'send'
+export const MAJOR_METHOD_NAMES: string[] = [GET_BLOCK_NUMBER_METHOD_NAME, CALL_METHOD_NAME, SEND_METHOD_NAME]
 
-enum CallType {
+export enum CallType {
   NORMAL,
   // Extra call to check health against an unhealthy provider
   HEALTH_CHECK,
@@ -57,18 +58,25 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
   private enableDbSync: boolean
   private syncingDb: boolean = false
   private dbSyncSampleProb: number
-  private healthStateRepository: ProviderHealthStateRepository
   private lastDbSyncTimestampInMs: number = 0
 
   constructor(
     network: Network,
     url: string,
+    headers: Record<string, string | number> | undefined,
     log: Logger,
     config: SingleJsonRpcProviderConfig,
     enableDbSync: boolean,
     dbSyncSampleProb: number
   ) {
-    super(url, network)
+    super(
+      {
+        url: url,
+        headers: headers,
+        timeout: 8000, // 8 seconds (default is 120s)
+      },
+      network
+    )
     this.url = url
     this.log = log
     this.providerName = deriveProviderName(url)
@@ -83,10 +91,9 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
       if (dbTableName === undefined) {
         throw new Error('Environment variable RPC_PROVIDER_HEALTH_TABLE_NAME is missing!')
       }
-      this.healthStateRepository = new ProviderHealthStateDynamoDbRepository(dbTableName, log)
       // Fire and forget. Won't check the sync result. But usually the sync will finish before the end of initialization
       // of the current lambda, so it should already know the latest provider health states before serving requests.
-      this.syncAndUpdateProviderHealthiness()
+      // this.syncAndUpdateProviderHealthiness()
     }
   }
 
@@ -145,7 +152,7 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
 
   private recordProviderCallSuccess(perf: SingleCallPerf) {
     this.logProviderCallSuccessMetric(perf.methodName)
-    this.logLatencyMetrics(perf.methodName, perf.latencyInMs)
+    this.logLatencyMetrics(perf.methodName, perf.latencyInMs, perf.callType)
     this.log.debug(`Succeeded at calling provider: ${this.url} method: ${perf.methodName}`)
 
     if (perf.callType === CallType.HEALTH_CHECK) {
@@ -174,7 +181,7 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
     try {
       await this.getBlockNumber_EvaluateHealthiness()
     } catch (error: any) {
-      this.log.error(`Encounter error for shadow call for evaluating healthiness: ${JSON.stringify(error)}`)
+      this.log.error({ error }, `Encounter error for shadow call for evaluating healthiness: ${JSON.stringify(error)}`)
       // Swallow the error.
     }
   }
@@ -184,9 +191,9 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
     this.logEvaluateLatency()
     this.evaluatingLatency = true
     try {
-      await (this as any)[`${methodName}_EvaluateLatency`](...args)
+      return await (this as any)[`${methodName}_EvaluateLatency`](...args)
     } catch (error: any) {
-      this.log.error(`Encounter error for shadow evaluate latency call: ${JSON.stringify(error)}`)
+      this.log.error({ error }, `Encounter error for shadow evaluate latency call: ${JSON.stringify(error)}`)
       // Swallow the error.
     }
   }
@@ -201,8 +208,12 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
     metric.putMetric(`${this.metricPrefix}_${methodName}_FAILED`, 1, MetricLoggerUnit.Count)
   }
 
-  logLatencyMetrics(methodName: string, latencyInMs: number) {
-    metric.putMetric(`${this.metricPrefix}_evaluated_latency_${methodName}`, latencyInMs, MetricLoggerUnit.None)
+  logLatencyMetrics(methodName: string, latencyInMs: number, callType: CallType) {
+    metric.putMetric(
+      `${this.metricPrefix}_evaluated_${callType}_latency_${methodName}`,
+      latencyInMs,
+      MetricLoggerUnit.Milliseconds
+    )
   }
 
   logCheckHealth() {
@@ -237,6 +248,26 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
     metric.putMetric(`${this.metricPrefix}_becomes_${newHealthiness}`, 1, MetricLoggerUnit.Count)
   }
 
+  logSendMetrod(method: string) {
+    metric.putMetric(`${this.metricPrefix}_send_${method}`, 1, MetricLoggerUnit.Count)
+  }
+
+  logRpcResponseMatch(method: string, otherProvider: SingleJsonRpcProvider) {
+    metric.putMetric(
+      `${this.metricPrefix}_other_provider_${otherProvider.providerId}_method_${method}_rpc_match`,
+      1,
+      MetricLoggerUnit.Count
+    )
+  }
+
+  logRpcResponseMismatch(method: string, otherProvider: SingleJsonRpcProvider) {
+    metric.putMetric(
+      `${this.metricPrefix}_other_provider_${otherProvider.providerId}_method_${method}_rpc_mismatch`,
+      1,
+      MetricLoggerUnit.Count
+    )
+  }
+
   private async wrappedFunctionCall(
     callType: CallType,
     fnName: string,
@@ -256,17 +287,22 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
       startTimestampInMs: Date.now(),
     }
     try {
-      return await fn(...args)
+      // TODO: consolidate start time here and above
+      perf.startTimestampInMs = Date.now()
+      const result = await fn(...args)
+      perf.latencyInMs = Date.now() - perf.startTimestampInMs
+
+      return result
     } catch (error: any) {
       perf.succeed = false
-      this.log.debug(
+      this.log.error(
+        { error },
         `Provider call failed: provider: ${this.url}, fnName: ${fnName}, fn: ${fn}, args: ${JSON.stringify([
           ...args,
         ])}, error details: ${JSON.stringify(error)}`
       )
       throw error
     } finally {
-      perf.latencyInMs = Date.now() - perf.startTimestampInMs
       this.checkLastCallPerformance(perf)
       if (this.enableDbSync) {
         if (!this.syncingDb && this.hasEnoughWaitSinceLastDbSync(1000 * this.config.DB_SYNC_INTERVAL_IN_S)) {
@@ -275,13 +311,17 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
             this.logDbSyncSampled()
             this.syncingDb = true
             // Fire and forget. Won't check the sync result.
-            this.syncAndUpdateProviderHealthiness()
+            // HealthState DB Sync and auto-failover didn't work during the incident.
+            // We are commenting out the DB sync to unblock integ-test in Sepolia,
+            // because HealthState DB has a record for 11155111_ALCHEMY with UNHEALTHY
+            // this.syncAndUpdateProviderHealthiness()
           }
         }
       }
     }
   }
 
+  /*
   private async syncAndUpdateProviderHealthiness() {
     try {
       const healthStateFromDb = await this.healthStateRepository.read(this.providerId)
@@ -299,13 +339,17 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
       this.log.debug(`${this.providerId}: Successfully synced with DB and updated states`)
       this.logDbSyncSuccess()
     } catch (err: any) {
-      this.log.error(`${this.providerId}: Encountered unhandled error when sync provider state: ${JSON.stringify(err)}`)
+      this.log.error(
+        { err },
+        `${this.providerId}: Encountered unhandled error when sync provider state: ${JSON.stringify(err)}`
+      )
       this.logDbSyncFailure()
       // Won't throw. A fail of sync won't stop us from serving requests.
     } finally {
       this.syncingDb = false
     }
   }
+   */
 
   ///////////////////// Begin of override functions /////////////////////
 
@@ -414,6 +458,7 @@ export class SingleJsonRpcProvider extends StaticJsonRpcProvider {
   }
 
   override send(method: string, params: Array<any>): Promise<any> {
+    this.logSendMetrod(method)
     return this.wrappedFunctionCall(CallType.NORMAL, 'send', super.send.bind(this), method, params)
   }
 

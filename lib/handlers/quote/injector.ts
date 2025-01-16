@@ -84,6 +84,8 @@ export class QuoteHandlerInjector extends InjectorSOR<
 
     const {
       provider,
+      v4PoolProvider,
+      v4SubgraphProvider,
       v3PoolProvider,
       multicallProvider,
       tokenProvider,
@@ -99,6 +101,10 @@ export class QuoteHandlerInjector extends InjectorSOR<
       simulator,
       routeCachingProvider,
       v2Supported,
+      v4Supported,
+      mixedSupported,
+      v4PoolParams,
+      cachedRoutesCacheInvalidationFixRolloutPercentage,
     } = dependencies[chainIdEnum]!
 
     let onChainQuoteProvider = dependencies[chainIdEnum]!.onChainQuoteProvider
@@ -115,6 +121,8 @@ export class QuoteHandlerInjector extends InjectorSOR<
         router = new AlphaRouter({
           chainId,
           provider,
+          v4SubgraphProvider,
+          v4PoolProvider,
           v3SubgraphProvider,
           multicall2Provider: multicallProvider,
           v3PoolProvider,
@@ -131,6 +139,10 @@ export class QuoteHandlerInjector extends InjectorSOR<
           tokenValidatorProvider,
           tokenPropertiesProvider,
           v2Supported,
+          v4Supported,
+          mixedSupported,
+          v4PoolParams,
+          cachedRoutesCacheInvalidationFixRolloutPercentage,
         })
         break
     }
@@ -141,6 +153,7 @@ export class QuoteHandlerInjector extends InjectorSOR<
       log,
       metric,
       router,
+      v4PoolProvider,
       v3PoolProvider,
       v2PoolProvider,
       tokenProvider,

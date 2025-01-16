@@ -1,9 +1,10 @@
-import { ChainId, TradeType } from '@uniswap/sdk-core'
-import { CachedRoutes } from '@uniswap/smart-order-router'
+import { Protocol } from '@uniswap/router-sdk'
+import { ChainId, Currency, TradeType } from '@uniswap/sdk-core'
+import { CachedRoutes, getAddress } from '@uniswap/smart-order-router'
 
 interface PairTradeTypeChainIdArgs {
-  tokenIn: string
-  tokenOut: string
+  currencyIn: string
+  currencyOut: string
   tradeType: TradeType
   chainId: ChainId
 }
@@ -12,28 +13,34 @@ interface PairTradeTypeChainIdArgs {
  * Class used to model the partition key of the CachedRoutes cache database and configuration.
  */
 export class PairTradeTypeChainId {
-  public readonly tokenIn: string
-  public readonly tokenOut: string
+  public readonly currencyIn: string
+  public readonly currencyOut: string
   public readonly tradeType: TradeType
   public readonly chainId: ChainId
 
-  constructor({ tokenIn, tokenOut, tradeType, chainId }: PairTradeTypeChainIdArgs) {
-    this.tokenIn = tokenIn.toLowerCase() // All token addresses should be lower case for normalization.
-    this.tokenOut = tokenOut.toLowerCase() // All token addresses should be lower case for normalization.
+  constructor({ currencyIn, currencyOut, tradeType, chainId }: PairTradeTypeChainIdArgs) {
+    this.currencyIn = currencyIn.toLowerCase() // All currency addresses should be lower case for normalization.
+    this.currencyOut = currencyOut.toLowerCase() // All currency addresses should be lower case for normalization.
     this.tradeType = tradeType
     this.chainId = chainId
   }
 
   public toString(): string {
-    return `${this.tokenIn}/${this.tokenOut}/${this.tradeType}/${this.chainId}`
+    return `${this.currencyIn}/${this.currencyOut}/${this.tradeType}/${this.chainId}`
   }
 
   public static fromCachedRoutes(cachedRoutes: CachedRoutes): PairTradeTypeChainId {
+    const includesV4Pool = cachedRoutes.routes.some((route) => route.protocol === Protocol.V4)
+
     return new PairTradeTypeChainId({
-      tokenIn: cachedRoutes.tokenIn.address,
-      tokenOut: cachedRoutes.tokenOut.address,
+      currencyIn: PairTradeTypeChainId.deriveCurrencyAddress(includesV4Pool, cachedRoutes.currencyIn),
+      currencyOut: PairTradeTypeChainId.deriveCurrencyAddress(includesV4Pool, cachedRoutes.currencyOut),
       tradeType: cachedRoutes.tradeType,
       chainId: cachedRoutes.chainId,
     })
+  }
+
+  public static deriveCurrencyAddress(includesV4Pool: boolean, currency: Currency): string {
+    return includesV4Pool ? getAddress(currency) : currency.wrapped.address
   }
 }

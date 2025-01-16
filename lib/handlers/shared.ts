@@ -2,6 +2,7 @@ import { ChainId, Currency, CurrencyAmount, Percent } from '@uniswap/sdk-core'
 import {
   AlphaRouterConfig,
   CacheMode,
+  INTENT,
   LowerCaseStringArray,
   MapWithLowerCaseKey,
   ProtocolPoolSelection,
@@ -15,8 +16,7 @@ export const SECONDS_PER_BLOCK_BY_CHAIN_ID: { [chainId in ChainId]?: number } = 
 
 export const DEFAULT_ROUTING_CONFIG_BY_CHAIN = (chainId: ChainId): AlphaRouterConfig => {
   switch (chainId) {
-    case ChainId.BASE:
-    case ChainId.OPTIMISM:
+    case ChainId.BLAST:
       return {
         v2PoolSelection: {
           topN: 3,
@@ -27,6 +27,82 @@ export const DEFAULT_ROUTING_CONFIG_BY_CHAIN = (chainId: ChainId): AlphaRouterCo
           topNWithBaseToken: 6,
         },
         v3PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 3,
+        },
+        v4PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 3,
+        },
+        maxSwapsPerPath: 3,
+        minSplits: 1,
+        maxSplits: 3,
+        distributionPercent: 10,
+        forceCrossProtocol: false,
+      }
+    case ChainId.BASE:
+      return {
+        v2PoolSelection: {
+          topN: 3,
+          topNDirectSwaps: 1,
+          topNTokenInOut: 5,
+          topNSecondHop: 2,
+          topNWithEachBaseToken: 2,
+          topNWithBaseToken: 6,
+        },
+        v3PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 3,
+        },
+        v4PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 3,
+        },
+        maxSwapsPerPath: 3,
+        minSplits: 1,
+        maxSplits: 3,
+        distributionPercent: 20,
+        forceCrossProtocol: false,
+      }
+    case ChainId.OPTIMISM:
+    case ChainId.WORLDCHAIN:
+    case ChainId.UNICHAIN_SEPOLIA:
+    case ChainId.MONAD_TESTNET:
+    case ChainId.BASE_SEPOLIA:
+      return {
+        v2PoolSelection: {
+          topN: 3,
+          topNDirectSwaps: 1,
+          topNTokenInOut: 5,
+          topNSecondHop: 2,
+          topNWithEachBaseToken: 2,
+          topNWithBaseToken: 6,
+        },
+        v3PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 3,
+        },
+        v4PoolSelection: {
           topN: 2,
           topNDirectSwaps: 2,
           topNTokenInOut: 2,
@@ -61,9 +137,58 @@ export const DEFAULT_ROUTING_CONFIG_BY_CHAIN = (chainId: ChainId): AlphaRouterCo
           topNWithEachBaseToken: 3,
           topNWithBaseToken: 2,
         },
+        v4PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 2,
+          topNSecondHop: 1,
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 2,
+        },
         maxSwapsPerPath: 2,
         minSplits: 1,
         maxSplits: 7,
+        distributionPercent: 25,
+        forceCrossProtocol: false,
+      }
+    case ChainId.ZKSYNC:
+      return {
+        v2PoolSelection: {
+          topN: 3,
+          topNDirectSwaps: 1,
+          topNTokenInOut: 5,
+          topNSecondHop: 2,
+          tokensToAvoidOnSecondHops: new LowerCaseStringArray(
+            '0xd46ba6d942050d489dbd938a2c909a5d5039a161' // AMPL on Mainnet
+          ),
+          topNWithEachBaseToken: 2,
+          topNWithBaseToken: 6,
+        },
+        v3PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 3,
+          topNSecondHop: 1,
+          topNSecondHopForTokenAddress: new MapWithLowerCaseKey<number>([
+            ['0x5f98805a4e8be255a32880fdec7f6728c6568ba0', 2], // LUSD
+          ]),
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 5,
+        },
+        v4PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 3,
+          topNSecondHop: 1,
+          topNSecondHopForTokenAddress: new MapWithLowerCaseKey<number>([
+            ['0x5f98805a4e8be255a32880fdec7f6728c6568ba0', 2], // LUSD
+          ]),
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 5,
+        },
+        maxSwapsPerPath: 3,
+        minSplits: 1,
+        maxSplits: 2,
         distributionPercent: 25,
         forceCrossProtocol: false,
       }
@@ -81,6 +206,17 @@ export const DEFAULT_ROUTING_CONFIG_BY_CHAIN = (chainId: ChainId): AlphaRouterCo
           topNWithBaseToken: 6,
         },
         v3PoolSelection: {
+          topN: 2,
+          topNDirectSwaps: 2,
+          topNTokenInOut: 3,
+          topNSecondHop: 1,
+          topNSecondHopForTokenAddress: new MapWithLowerCaseKey<number>([
+            ['0x5f98805a4e8be255a32880fdec7f6728c6568ba0', 2], // LUSD
+          ]),
+          topNWithEachBaseToken: 3,
+          topNWithBaseToken: 5,
+        },
+        v4PoolSelection: {
           topN: 2,
           topNDirectSwaps: 2,
           topNTokenInOut: 3,
@@ -136,6 +272,7 @@ export const QUOTE_SPEED_CONFIG: { [key: string]: QuoteSpeedConfig } = {
 }
 
 export type IntentSpecificConfig = {
+  intent?: INTENT
   useCachedRoutes?: boolean
   overwriteCacheMode?: CacheMode
   optimisticCachedRoutes?: boolean
@@ -144,23 +281,27 @@ export type IntentSpecificConfig = {
 export const INTENT_SPECIFIC_CONFIG: { [key: string]: IntentSpecificConfig } = {
   caching: {
     // When the intent is to create a cache entry, we will use cachedRoutes with Tapcompare to track accuracy
+    intent: INTENT.CACHING,
     useCachedRoutes: true,
-    overwriteCacheMode: CacheMode.Tapcompare,
+    // overwriteCacheMode: CacheMode.Tapcompare,
     // This optimistic=false is *super* important to avoid an infinite loop of caching quotes calling themselves
     optimisticCachedRoutes: false,
   },
   quote: {
     // When the intent is to get a quote, we should use the cache and optimistic cached routes
+    intent: INTENT.QUOTE,
     useCachedRoutes: true,
     optimisticCachedRoutes: true,
   },
   swap: {
     // When the intent is to prepare the swap, we can use cache, but it should not be optimistic
+    intent: INTENT.SWAP,
     useCachedRoutes: true,
     optimisticCachedRoutes: false,
   },
   pricing: {
     // When the intent is to get pricing, we should use the cache and optimistic cached routes
+    intent: INTENT.PRICING,
     useCachedRoutes: true,
     optimisticCachedRoutes: true,
   },

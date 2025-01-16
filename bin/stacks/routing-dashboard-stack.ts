@@ -956,6 +956,59 @@ export class RoutingDashboardStack extends cdk.NestedStack {
                 },
               },
             },
+            {
+              type: 'metric',
+              width: 12,
+              height: 8,
+              properties: {
+                view: 'timeSeries',
+                stacked: false,
+                metrics: [
+                  [NAMESPACE, 'TenderlySimulationSwapRouter02Latencies', 'Service', 'RoutingAPI', { stat: 'p90' }],
+                  ['.', 'TenderlySimulationSwapRouter02Latencies', '.', '.', { stat: 'p99' }],
+                  ['.', 'TenderlySimulationSwapRouter02Latencies', '.', '.', { stat: 'p50' }],
+                  ['.', 'TenderlySimulationUniversalRouterLatencies', '.', '.', { stat: 'p90' }],
+                  ['.', 'TenderlySimulationUniversalRouterLatencies', '.', '.', { stat: 'p99' }],
+                  ['.', 'TenderlySimulationUniversalRouterLatencies', '.', '.', { stat: 'p50' }],
+                ],
+                region,
+                title: 'Tenderly Simulation Latencies',
+                period: 300,
+                stat: 'SampleCount',
+              },
+            },
+            {
+              height: 10,
+              width: 12,
+              type: 'metric',
+              properties: {
+                metrics: _.flatMap(MAINNETS, (chainId: ChainId) => {
+                  return [
+                    [
+                      NAMESPACE,
+                      `RPC_GATEWAY_GET_QUOTE_LATENCY_CHAIN_${chainId}`,
+                      'Service',
+                      'RoutingAPI',
+                      { label: `${ID_TO_NETWORK_NAME(chainId)} P90`, stat: 'p90' },
+                    ],
+                    ['...', { label: `${ID_TO_NETWORK_NAME(chainId)} P50`, stat: 'p50' }],
+                  ]
+                }),
+                view: 'timeSeries',
+                stacked: false,
+                region,
+                stat: 'SampleCount',
+                period: 300,
+                title: `Quote latency for all chains using RPC gateway`,
+                setPeriodToTimeRange: true,
+                yAxis: {
+                  left: {
+                    showUnits: false,
+                    label: 'Ms',
+                  },
+                },
+              },
+            },
           ])
           .concat(rpcProvidersWidgetsForRoutingDashboard),
       }),

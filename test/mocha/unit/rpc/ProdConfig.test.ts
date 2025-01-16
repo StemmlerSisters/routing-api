@@ -1,6 +1,7 @@
 import { expect } from 'chai'
 import { getRpcGatewayEnabledChains, ProdConfig, ProdConfigJoi } from '../../../../lib/rpc/ProdConfig'
 import TEST_PROD_CONFIG from './rpcProviderTestProdConfig.json'
+import PROD_CONFIG from '../../../../lib/config/rpcProviderProdConfig.json'
 import { ChainId } from '@uniswap/sdk-core'
 
 describe('ProdConfig', () => {
@@ -78,14 +79,21 @@ describe('ProdConfig', () => {
   it('test getRpcGatewayEnabledChainIdProviderNamePairs', () => {
     const enabledChains: Map<ChainId, string[]> = getRpcGatewayEnabledChains(TEST_PROD_CONFIG)
     expect(enabledChains.get(ChainId.CELO)).to.have.members(['QUICKNODE', 'INFURA'])
-    expect(enabledChains.get(ChainId.AVALANCHE)).to.have.members(['INFURA', 'QUICKNODE', 'NIRVANA'])
+    expect(enabledChains.get(ChainId.AVALANCHE)).to.have.members(['INFURA', 'QUICKNODE'])
     expect(enabledChains.get(ChainId.BNB)).to.have.members(['QUICKNODE'])
     expect(enabledChains.get(ChainId.OPTIMISM)).to.have.members(['INFURA', 'QUICKNODE', 'ALCHEMY'])
     expect(enabledChains.get(ChainId.SEPOLIA)).to.have.members(['INFURA', 'ALCHEMY'])
     expect(enabledChains.get(ChainId.POLYGON)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY'])
-    expect(enabledChains.get(ChainId.ARBITRUM_ONE)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY', 'NIRVANA'])
-    expect(enabledChains.get(ChainId.BASE)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY', 'NIRVANA'])
-    expect(enabledChains.get(ChainId.MAINNET)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY', 'NIRVANA'])
+    expect(enabledChains.get(ChainId.ARBITRUM_ONE)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY'])
+    expect(enabledChains.get(ChainId.BASE)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY'])
+    expect(enabledChains.get(ChainId.MAINNET)).to.have.members(['QUICKNODE', 'INFURA', 'ALCHEMY', 'UNIRPC'])
     expect(enabledChains.get(ChainId.BLAST)).to.have.members(['QUICKNODE', 'INFURA'])
+  })
+
+  it('validates prod config', () => {
+    for (const entry of PROD_CONFIG) {
+      expect(entry.providerUrls.length === entry.providerInitialWeights.length).equals(true)
+      expect(entry.providerUrls.length === entry.providerNames.length).equals(true)
+    }
   })
 })

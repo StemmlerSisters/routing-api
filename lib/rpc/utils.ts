@@ -18,12 +18,26 @@ export function chainIdToNetworkName(networkId: ChainId): string {
       return 'avalanchec'
     case ChainId.BASE:
       return 'base'
+    case ChainId.WORLDCHAIN:
+      return 'worldchain'
+    case ChainId.UNICHAIN_SEPOLIA:
+      return 'unichain-sepolia'
+    case ChainId.MONAD_TESTNET:
+      return 'monad-testnet'
+    case ChainId.BASE_SEPOLIA:
+      return 'base-sepolia'
     default:
       return 'ethereum'
   }
 }
 
-export function generateProviderUrl(key: string, value: string): string {
+export function generateProviderUrl(key: string, value: string, chainId: number): string {
+  if (key === 'UNIRPC_0') {
+    // UNIRPC_0 is a special case for the Uniswap RPC
+    // - env value will contain the generic unirpc endpoint - no trailing '/'
+    return `${value}/rpc/${chainId}`
+  }
+
   const tokens = value.split(',')
   switch (key) {
     // Infura
@@ -54,22 +68,6 @@ export function generateProviderUrl(key: string, value: string): string {
     case 'INFURA_81457': {
       return `https://blast-mainnet.infura.io/v3/${tokens[0]}`
     }
-    // Nirvana
-    case 'NIRVANA_43114': {
-      return `https://avax.nirvanalabs.xyz/${tokens[0]}/ext/bc/C/rpc?apikey=${tokens[1]}`
-    }
-    case 'NIRVANA_10': {
-      return `https://optimism.nirvanalabs.xyz/${tokens[0]}?apikey=${tokens[1]}`
-    }
-    case 'NIRVANA_8453': {
-      return `https://base.nirvanalabs.xyz/${tokens[0]}?apikey=${tokens[1]}`
-    }
-    case 'NIRVANA_42161': {
-      return `https://arb.nirvanalabs.xyz/${tokens[0]}?apikey=${tokens[1]}`
-    }
-    case 'NIRVANA_1': {
-      return `https://ethereum.nirvanalabs.xyz/${tokens[0]}?apikey=${tokens[1]}`
-    }
     // Quicknode
     case 'QUICKNODE_43114': {
       return `https://${tokens[0]}.avalanche-mainnet.quiknode.pro/${tokens[1]}/ext/bc/C/rpc/`
@@ -89,6 +87,9 @@ export function generateProviderUrl(key: string, value: string): string {
     case 'QUICKNODE_8453': {
       return `https://${tokens[0]}.base-mainnet.quiknode.pro/${tokens[1]}`
     }
+    case 'QUICKNODE_84532': {
+      return `https://${tokens[0]}.base-sepolia.quiknode.pro/${tokens[1]}`
+    }
     case 'QUICKNODE_42161': {
       return `https://${tokens[0]}.arbitrum-mainnet.quiknode.pro/${tokens[1]}`
     }
@@ -98,24 +99,44 @@ export function generateProviderUrl(key: string, value: string): string {
     case 'QUICKNODE_81457': {
       return `https://${tokens[0]}.blast-mainnet.quiknode.pro/${tokens[1]}`
     }
+    case 'QUICKNODE_7777777': {
+      return `https://${tokens[0]}.zora-mainnet.quiknode.pro/${tokens[1]}`
+    }
+    case 'QUICKNODE_324': {
+      return `https://${tokens[0]}.zksync-mainnet.quiknode.pro/${tokens[1]}`
+    }
+    case 'QUICKNODE_1301': {
+      // URL contains unichain-sepolia.quiknode.pro, we had to not disclose prior to the unichain annouce
+      return `${tokens[0]}`
+    }
+    case 'QUICKNODE_480': {
+      return `https://${tokens[0]}.worldchain-mainnet.quiknode.pro/${tokens[1]}`
+    }
+    // QuickNode RETH
+    case 'QUICKNODERETH_1': {
+      return `https://${tokens[0]}.quiknode.pro/${tokens[1]}`
+    }
     // Alchemy
     case 'ALCHEMY_10': {
-      return `https://opt-mainnet.g.alchemy.com/v2/${tokens[0]}`
+      return `https://opt-mainnet-fast.g.alchemy.com/v2/${tokens[0]}`
     }
     case 'ALCHEMY_137': {
-      return `https://polygon-mainnet.g.alchemy.com/v2/${tokens[0]}`
+      return `https://polygon-mainnet-fast.g.alchemy.com/v2/${tokens[0]}`
     }
     case 'ALCHEMY_8453': {
-      return `https://base-mainnet.g.alchemy.com/v2/${tokens[0]}`
+      return `https://base-mainnet-fast.g.alchemy.com/v2/${tokens[0]}`
     }
     case 'ALCHEMY_11155111': {
-      return `https://eth-sepolia.g.alchemy.com/v2/${tokens[0]}`
+      return `https://eth-sepolia-fast.g.alchemy.com/v2/${tokens[0]}`
     }
     case 'ALCHEMY_42161': {
-      return `https://arb-mainnet.g.alchemy.com/v2/${tokens[0]}`
+      return `https://arb-mainnet-fast.g.alchemy.com/v2/${tokens[0]}`
     }
     case 'ALCHEMY_1': {
-      return `https://eth-mainnet.g.alchemy.com/v2/${tokens[0]}`
+      return `https://eth-mainnet-fast.g.alchemy.com/v2/${tokens[0]}`
+    }
+    case 'ALCHEMY_324': {
+      return `https://zksync-mainnet.g.alchemy.com/v2/${tokens[0]}`
     }
   }
   throw new Error(`Unknown provider-chainId pair: ${key}`)

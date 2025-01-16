@@ -1,5 +1,6 @@
 import Joi from '@hapi/joi'
 import { MethodParameters } from '@uniswap/smart-order-router'
+import { RoutingApiSimulationStatus } from './quote/util/simulation'
 
 export type TokenInRoute = {
   address: string
@@ -8,6 +9,23 @@ export type TokenInRoute = {
   decimals: string
   buyFeeBps?: string
   sellFeeBps?: string
+}
+
+export type SupportedPoolInRoute = V2PoolInRoute | V3PoolInRoute | V4PoolInRoute
+
+export type V4PoolInRoute = {
+  type: 'v4-pool'
+  address: string
+  tokenIn: TokenInRoute
+  tokenOut: TokenInRoute
+  sqrtRatioX96: string
+  liquidity: string
+  tickCurrent: string
+  fee: string
+  tickSpacing: string
+  hooks: string
+  amountIn?: string
+  amountOut?: string
 }
 
 export type V3PoolInRoute = {
@@ -71,6 +89,7 @@ export const QuoteResponseSchemaJoi = Joi.object().keys({
   portionRecipient: Joi.string().optional(),
   portionAmount: Joi.string().optional(),
   portionAmountDecimals: Joi.string().optional(),
+  priceImpact: Joi.string().optional(),
 })
 
 export type QuoteResponse = {
@@ -90,10 +109,10 @@ export type QuoteResponse = {
   gasUseEstimateGasTokenDecimals?: string
   gasUseEstimateUSD: string
   simulationError?: boolean
-  simulationStatus: string
+  simulationStatus: RoutingApiSimulationStatus
   gasPriceWei: string
   blockNumber: string
-  route: Array<(V3PoolInRoute | V2PoolInRoute)[]>
+  route: Array<SupportedPoolInRoute[]>
   routeString: string
   methodParameters?: MethodParameters
   hitsCachedRoutes?: boolean
@@ -101,4 +120,5 @@ export type QuoteResponse = {
   portionRecipient?: string
   portionAmount?: string
   portionAmountDecimals?: string
+  priceImpact?: string
 }

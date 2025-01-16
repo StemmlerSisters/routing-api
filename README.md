@@ -32,9 +32,15 @@ The best way to develop and test the API is to deploy your own instance to AWS.
    # BNB = 56
    # BASE = 8453
    # BLAST = 81457
+   # ZORA = 7777777
+   # ZKSYNC = 324
    TENDERLY_USER = '' # For enabling Tenderly simulations
    TENDERLY_PROJECT = '' # For enabling Tenderly simulations
    TENDERLY_ACCESS_KEY = '' # For enabling Tenderly simulations
+   TENDERLY_NODE_API_KEY = '' # For enabling Tenderly node-level RPC access
+   ALCHEMY_QUERY_KEY = '' # For Alchemy subgraph query access
+   GQL_URL = '' # The GraphQL endpoint url, for Uniswap graphql query access
+   GQL_H_ORGN = '' # The GraphQL header origin, for Uniswap graphql query access
    ```
 3. Install and build the package
    ```

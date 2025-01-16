@@ -1,7 +1,9 @@
-import { Token } from '@uniswap/sdk-core'
+import { Currency, Token } from '@uniswap/sdk-core'
 import { BigNumber } from 'ethers'
+import { getAddress, nativeOnChain } from '@uniswap/smart-order-router'
+import { isNativeCurrency } from '@uniswap/universal-router-sdk'
 
-export interface MarshalledToken {
+export interface MarshalledCurrency {
   chainId: number
   address: string
   decimals: number
@@ -12,28 +14,30 @@ export interface MarshalledToken {
 }
 
 export class TokenMarshaller {
-  public static marshal(token: Token): MarshalledToken {
+  public static marshal(currency: Currency): MarshalledCurrency {
     return {
-      chainId: token.chainId,
-      address: token.address,
-      decimals: token.decimals,
-      symbol: token.symbol,
-      name: token.name,
-      buyFeeBps: token.buyFeeBps?.toString(),
-      sellFeeBps: token.sellFeeBps?.toString(),
+      chainId: currency.chainId,
+      address: getAddress(currency),
+      decimals: currency.decimals,
+      symbol: currency.symbol,
+      name: currency.name,
+      buyFeeBps: currency.isToken ? currency.buyFeeBps?.toString() : undefined,
+      sellFeeBps: currency.isToken ? currency.sellFeeBps?.toString() : undefined,
     }
   }
 
-  public static unmarshal(marshalledToken: MarshalledToken): Token {
-    return new Token(
-      marshalledToken.chainId,
-      marshalledToken.address,
-      marshalledToken.decimals,
-      marshalledToken.symbol,
-      marshalledToken.name,
-      true, // at this point we know it's valid token address
-      marshalledToken.buyFeeBps ? BigNumber.from(marshalledToken.buyFeeBps) : undefined,
-      marshalledToken.sellFeeBps ? BigNumber.from(marshalledToken.sellFeeBps) : undefined
-    )
+  public static unmarshal(marshalledCurrency: MarshalledCurrency): Currency {
+    return isNativeCurrency(marshalledCurrency.address)
+      ? nativeOnChain(marshalledCurrency.chainId)
+      : new Token(
+          marshalledCurrency.chainId,
+          marshalledCurrency.address,
+          marshalledCurrency.decimals,
+          marshalledCurrency.symbol,
+          marshalledCurrency.name,
+          true, // at this point we know it's valid token address
+          marshalledCurrency.buyFeeBps ? BigNumber.from(marshalledCurrency.buyFeeBps) : undefined,
+          marshalledCurrency.sellFeeBps ? BigNumber.from(marshalledCurrency.sellFeeBps) : undefined
+        )
   }
 }

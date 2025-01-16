@@ -7,11 +7,14 @@ import {
   MetricLoggerUnit,
   V2SubgraphPool,
   V3SubgraphPool,
+  V4SubgraphPool,
 } from '@uniswap/smart-order-router'
 import { S3 } from 'aws-sdk'
 import { ChainId } from '@uniswap/sdk-core'
 import NodeCache from 'node-cache'
 import { S3_POOL_CACHE_KEY } from '../../util/pool-cache-key'
+import { PoolCachingFilePrefixes } from '../../util/poolCachingFilePrefixes'
+import * as zlib from 'zlib'
 
 const POOL_CACHE = new NodeCache({ stdTTL: 240, useClones: false })
 const LOCAL_POOL_CACHE_KEY = (chainId: ChainId, protocol: Protocol) => `pools${chainId}#${protocol}`
@@ -78,8 +81,16 @@ export const cachePoolsFromS3 = async <TSubgraphPool>(
     throw new Error(`Could not get subgraph pool cache from S3 for protocol ${protocol} on chain ${chainId}`)
   }
 
+  let poolString
+
+  if (key.startsWith(PoolCachingFilePrefixes.GzipText)) {
+    poolString = zlib.inflateSync(poolsBuffer as Buffer).toString('utf-8')
+  } else {
+    poolString = poolsBuffer.toString('utf-8')
+  }
+
   const before = Date.now()
-  const pools = JSON.parse(poolsBuffer.toString('utf-8')) as TSubgraphPool[]
+  const pools = JSON.parse(poolString) as TSubgraphPool[]
   const after = Date.now()
 
   log.info(
@@ -94,6 +105,18 @@ export const cachePoolsFromS3 = async <TSubgraphPool>(
   POOL_CACHE.set<TSubgraphPool[]>(LOCAL_POOL_CACHE_KEY(chainId, protocol), pools)
 
   return pools
+}
+
+export class V4AWSSubgraphProvider extends AWSSubgraphProvider<V4SubgraphPool> implements IV3SubgraphProvider {
+  constructor(chainId: ChainId, bucket: string, baseKey: string) {
+    super(chainId, Protocol.V4, bucket, baseKey)
+  }
+
+  public static async EagerBuild(bucket: string, baseKey: string, chainId: ChainId): Promise<V3AWSSubgraphProvider> {
+    await cachePoolsFromS3<V3SubgraphPool>(s3, bucket, baseKey, chainId, Protocol.V4)
+
+    return new V4AWSSubgraphProvider(chainId, bucket, baseKey)
+  }
 }
 
 export class V3AWSSubgraphProvider extends AWSSubgraphProvider<V3SubgraphPool> implements IV3SubgraphProvider {
